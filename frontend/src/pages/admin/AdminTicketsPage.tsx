@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAdminApi } from '../../hooks/useadminapi';
+import { useAdminApi } from '../../hooks/useAdminApi';
 import { Ticket, Trash2, ArrowRight } from 'lucide-react';
 
 export default function AdminTicketsPage() {
@@ -34,16 +34,16 @@ export default function AdminTicketsPage() {
   };
 
   return (
-    <div className="p-8 text-gray-200">
+    <div className="p-8 text-gray-800">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <Ticket size={20} className="text-orange-400" /> Billets de vol
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">{data.total} au total</p>
         </div>
         <select value={status} onChange={e => { setStatus(e.target.value); load(e.target.value); }}
-          className="px-4 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-gray-300 outline-none focus:border-orange-500">
+          className="px-4 py-2 bg-gray-50 border border-gray-700 rounded-xl text-sm text-gray-600 outline-none focus:border-orange-500">
           <option value="">Tous les statuts</option>
           <option value="upcoming">À venir</option>
           <option value="completed">Terminés</option>
@@ -51,10 +51,10 @@ export default function AdminTicketsPage() {
         </select>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+      <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-gray-800">
+            <tr className="border-b border-gray-100">
               {['Vol', 'Trajet', 'Utilisateur', 'Départ', 'Prix', 'Statut', ''].map(h => (
                 <th key={h} className="text-left text-xs text-gray-500 font-medium px-5 py-3">{h}</th>
               ))}
@@ -64,14 +64,14 @@ export default function AdminTicketsPage() {
             {loading ? (
               <tr><td colSpan={7} className="text-center py-10 text-gray-600">Chargement...</td></tr>
             ) : data.tickets.map((t: any) => (
-              <tr key={t.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                <td className="px-5 py-3 text-sm font-mono text-gray-300">{t.flightNumber || '—'}</td>
+              <tr key={t.id} className="border-b border-gray-100 hover:bg-orange-50/30 transition-colors">
+                <td className="px-5 py-3 text-sm font-mono text-gray-600">{t.flightNumber || '—'}</td>
                 <td className="px-5 py-3">
-                  <span className="flex items-center gap-1.5 font-semibold text-white text-sm">
+                  <span className="flex items-center gap-1.5 font-semibold text-gray-900 text-sm">
                     {t.origin} <ArrowRight size={11} className="text-orange-400" /> {t.destination}
                   </span>
                 </td>
-                <td className="px-5 py-3 text-sm text-gray-400">{t.userName || '—'}</td>
+                <td className="px-5 py-3 text-sm text-gray-500">{t.userName || '—'}</td>
                 <td className="px-5 py-3 text-sm text-gray-500">
                   {t.departureDate ? new Date(t.departureDate).toLocaleDateString('fr-FR') : '—'}
                 </td>

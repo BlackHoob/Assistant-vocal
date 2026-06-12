@@ -10,10 +10,11 @@ export const useVoice = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const synthRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
+  // ─── ENREGISTREMENT MICRO ────────────────────────────────
   const startRecording = useCallback(async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
@@ -34,7 +35,9 @@ export const useVoice = () => {
           reader.onload = async () => {
             const base64 = (reader.result as string).split(',')[1];
             const res = await fetch(`${API}/voice/stt`, {
-              method: 'POST', headers, body: JSON.stringify({ audioBase64: base64 }),
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ audioBase64: base64 }),
             });
             const data = await res.json();
             resolve(data.text || '');
@@ -47,37 +50,65 @@ export const useVoice = () => {
       setIsRecording(false);
     }), [token]);
 
+  // ─── CHAT IA ─────────────────────────────────────────────
   const sendMessage = useCallback(async (messages: any[]): Promise<string> => {
     setIsLoading(true);
     try {
       const res = await fetch(`${API}/voice/chat`, {
-        method: 'POST', headers, body: JSON.stringify({ messages }),
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ messages }),
       });
       const data = await res.json();
       return data.reply || '';
     } finally { setIsLoading(false); }
   }, [token]);
 
-  const speak = useCallback(async (text: string) => {
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    setIsSpeaking(true);
-    try {
-      const res = await fetch(`${API}/voice/tts`, {
-        method: 'POST', headers, body: JSON.stringify({ text }),
-      });
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url); };
-      audio.onerror = () => setIsSpeaking(false);
-      await audio.play();
-    } catch { setIsSpeaking(false); }
-  }, [token]);
+  // ─── SYNTHÈSE VOCALE (Web Speech API) ───────────────────
+  const speak = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      // Annuler toute synthèse en cours
+      window.speechSynthesis.cancel();
 
-  const stopSpeaking = useCallback(() => {
-    audioRef.current?.pause(); audioRef.current = null; setIsSpeaking(false);
+      const utterance = new SpeechSynthesisUtterance(text);
+      synthRef.current = utterance;
+
+      // Configuration voix française
+      const langCode = (window as any).__nestorLang || localStorage.getItem('lang') || 'fr';
+      const langMap: Record<string, string> = { fr: 'fr-FR', en: 'en-US', ar: 'ar-SA', es: 'es-ES', pt: 'pt-BR' };
+      utterance.lang = langMap[langCode] || 'fr-FR';
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+
+      // Chercher une voix dans la langue choisie
+      const voices = window.speechSynthesis.getVoices();
+      const matchVoice = voices.find(v =>
+        v.lang.startsWith(langCode) && (v.name.includes('Google') || v.name.includes('Microsoft'))
+      ) || voices.find(v => v.lang.startsWith(langCode));
+      if (matchVoice) utterance.voice = matchVoice;
+
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => { setIsSpeaking(false); resolve(); };
+      utterance.onerror = () => { setIsSpeaking(false); resolve(); };
+
+      window.speechSynthesis.speak(utterance);
+    });
   }, []);
 
-  return { isRecording, isLoading, isSpeaking, startRecording, stopAndTranscribe, sendMessage, speak, stopSpeaking };
+  const stopSpeaking = useCallback(() => {
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+  }, []);
+
+  return {
+    isRecording,
+    isLoading,
+    isSpeaking,
+    startRecording,
+    stopAndTranscribe,
+    sendMessage,
+    speak,
+    stopSpeaking,
+  };
 };

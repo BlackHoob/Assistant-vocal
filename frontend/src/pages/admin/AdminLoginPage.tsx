@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { Mic, Eye, EyeOff, Shield } from 'lucide-react';
 
@@ -33,67 +33,84 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="text-center mb-10">
-          <div className="w-16 h-16 rounded-3xl bg-orange-500 flex items-center justify-center mx-auto mb-4 shadow-xl shadow-orange-500/30">
-            <Mic size={28} className="text-white" />
+    <div className="min-h-screen bg-white flex font-sans">
+      {/* Panneau gauche */}
+      <div className="hidden lg:flex w-1/2 bg-orange-500 relative overflow-hidden items-center justify-center">
+        <div className="absolute inset-0 bg-gradient-to-br from-orange-400 to-orange-600" />
+        <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full bg-white/8" />
+        <div className="relative z-10 text-center px-12">
+          <div className="w-20 h-20 rounded-3xl bg-white/20 backdrop-blur-sm border border-white/30 flex items-center justify-center mx-auto mb-8 shadow-xl">
+            <Shield size={36} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Nestor Vocal</h1>
-          <p className="text-gray-500 text-sm mt-1 flex items-center justify-center gap-1.5">
-            <Shield size={13} /> Espace administration
+          <h2 className="text-3xl font-bold text-white mb-4">Nestor Vocal</h2>
+          <p className="text-orange-100 text-sm leading-relaxed max-w-xs">
+            Espace administration sécurisé. Gérez les utilisateurs, rendez-vous et données.
           </p>
         </div>
+      </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
-          <h2 className="text-base font-semibold text-white mb-6">Connexion administrateur</h2>
+      {/* Panneau droit */}
+      <div className="flex-1 flex items-center justify-center px-6 py-10">
+        <div className="w-full max-w-sm">
+
+          {/* Logo mobile */}
+          <div className="flex items-center gap-3 mb-8 lg:hidden">
+            <div className="w-10 h-10 rounded-2xl bg-orange-500 flex items-center justify-center">
+              <Mic size={20} className="text-white" />
+            </div>
+            <span className="font-bold text-gray-900">Nestor Vocal</span>
+          </div>
+
+          {/* ── SWITCH EN HAUT ── */}
+          <div className="flex rounded-2xl border border-gray-200 p-1 mb-8 bg-gray-50">
+            <Link to="/login"
+              className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors">
+               Client
+            </Link>
+            <div className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl bg-white shadow-sm border border-gray-100 text-sm font-semibold text-orange-500">
+               Admin
+            </div>
+          </div>
+
+          <h1 className="text-2xl font-semibold text-gray-900 mb-1">Administration </h1>
+          <p className="text-sm text-gray-400 mb-6">Connectez-vous à l'espace administrateur</p>
 
           {error && (
-            <div className="mb-4 px-4 py-3 bg-red-500/10 text-red-400 text-sm rounded-xl border border-red-500/20">
+            <div className="mb-4 px-4 py-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">
               {error}
             </div>
           )}
 
+          {/* Formulaire */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-xs font-medium text-gray-500 block mb-1.5">
+              <label className="text-xs font-medium text-gray-600 block mb-1.5">
                 Nom d'utilisateur ou email
               </label>
               <input type="text" value={username} onChange={e => setUsername(e.target.value)} required
-                className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-orange-500 transition-colors"
-                placeholder="admin" autoComplete="username" />
+                className="input-field" placeholder="admin" autoComplete="username" />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-500 block mb-1.5">Mot de passe</label>
+              <label className="text-xs font-medium text-gray-600 block mb-1.5">Mot de passe</label>
               <div className="relative">
                 <input type={showPwd ? 'text' : 'password'} value={password}
                   onChange={e => setPassword(e.target.value)} required
-                  className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-orange-500 transition-colors pr-10"
-                  placeholder="••••••••" autoComplete="current-password" />
+                  className="input-field pr-10" placeholder="••••••••" autoComplete="current-password" />
                 <button type="button" onClick={() => setShowPwd(!showPwd)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
-                  {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                  {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
-
             <button type="submit" disabled={loading}
-              className="w-full bg-orange-500 text-white text-sm font-medium py-3 rounded-xl hover:bg-orange-600 transition-all active:scale-95 flex items-center justify-center gap-2 mt-2">
+              className="btn-primary w-full flex items-center justify-center gap-2">
               {loading
-                ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 : 'Se connecter'}
             </button>
           </form>
 
-          <p className="text-xs text-gray-700 text-center mt-5">
-            Accès restreint — JWT + bcrypt
-          </p>
         </div>
-
-        <p className="text-center text-xs text-gray-700 mt-4">
-          Identifiants par défaut : <span className="text-gray-500">admin / Admin123!</span>
-        </p>
       </div>
     </div>
   );

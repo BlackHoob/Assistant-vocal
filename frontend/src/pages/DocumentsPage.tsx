@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { FileText, Upload, Trash2, AlertTriangle, Download, File, Image, FileType } from 'lucide-react';
+import { FileText, Upload, Trash2, AlertTriangle, CheckCircle, Clock, FileType, CreditCard, Globe, Shield, Syringe, X } from 'lucide-react';
 
-const API = import.meta.env.VITE_API_URL || '/api';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 interface Document {
   id: number;
@@ -12,125 +12,78 @@ interface Document {
   mime_type?: string;
   expires_at?: string;
   created_at: string;
+  docType?: string;
 }
 
-const requiredDocuments = [
-  {
-    key: 'passport',
-    label: 'Passeport',
-    required: true,
-    hasExpiry: true,
-  },
-  {
-    key: 'visa',
-    label: 'Visa',
-    required: false,
-    hasExpiry: true,
-  },
-  {
-    key: 'esta',
-    label: 'ESTA / ETA / eTA',
-    required: false,
-    hasExpiry: true,
-  },
-  {
-    key: 'return_ticket',
-    label: 'Billet retour',
-    required: false,
-    hasExpiry: false,
-  },
-  {
-    key: 'accommodation',
-    label: "Justificatif d'hébergement",
-    required: false,
-    hasExpiry: false,
-  },
-  {
-    key: 'financial_proof',
-    label: 'Justificatif de ressources',
-    required: false,
-    hasExpiry: false,
-  },
-  {
-    key: 'health_certificate',
-    label: 'Certificat sanitaire',
-    required: false,
-    hasExpiry: true,
-  },
+// Types de documents avec leur config
+const DOC_TYPES = [
+  { key: 'passport',    label: 'Passeport',          icon: Globe,    color: 'blue',   accept: '.pdf,.jpg,.jpeg,.png' },
+  { key: 'visa',        label: 'Visa',                icon: FileType, color: 'purple', accept: '.pdf,.jpg,.jpeg,.png' },
+  { key: 'id_card',     label: "Carte d'identité",   icon: CreditCard,color: 'green',  accept: '.pdf,.jpg,.jpeg,.png' },
+  { key: 'insurance',   label: 'Assurance voyage',   icon: Shield,   color: 'orange', accept: '.pdf' },
+  { key: 'vaccination', label: 'Carnet vaccinal',    icon: Syringe,  color: 'red',    accept: '.pdf,.jpg,.jpeg,.png' },
+  { key: 'other',       label: 'Autre document',     icon: FileText, color: 'gray',   accept: '*' },
 ];
 
-const getFileIcon = (mimeType?: string) => {
-  if (!mimeType) return File;
-  if (mimeType.startsWith('image/')) return Image;
-  if (mimeType === 'application/pdf') return FileType;
-  return FileText;
+const colorMap: Record<string, string> = {
+  blue:   'bg-blue-50 text-blue-600 border-blue-100',
+  purple: 'bg-purple-50 text-purple-600 border-purple-100',
+  green:  'bg-green-50 text-green-600 border-green-100',
+  orange: 'bg-orange-50 text-orange-600 border-orange-100',
+  red:    'bg-red-50 text-red-600 border-red-100',
+  gray:   'bg-gray-50 text-gray-500 border-gray-100',
 };
 
-const formatSize = (bytes?: number) => {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} o`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} Ko`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} Mo`;
-};
-
-const daysUntilExpiry = (date: string) => {
+const daysUntilExpiry = (date?: string) => {
+  if (!date) return null;
   const diff = new Date(date).getTime() - Date.now();
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 };
 
 export default function DocumentsPage() {
-  const { jwt: token } = useAuth();
+  const { token } = useAuth();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const [uploadForm, setUploadForm] = useState({ name: '', expires_at: '' });
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedDocType, setSelectedDocType] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<string | null>(null); // key du type en cours
+  const [error, setError] = useState('');
+  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
   const headers = { Authorization: `Bearer ${token}` };
 
   const load = async () => {
-    const res = await fetch(`${API}/documents`, { headers });
-    if (res.ok) setDocuments(await res.json());
-    setLoading(false);
+    try {
+      const res = await fetch(`${API}/documents`, { headers });
+      const data = await res.json();
+      setDocuments(Array.isArray(data) ? data : []);
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
 
-  const handleFileSelect = (file: File) => {
-  setSelectedFile(file);
+  // Récupère le document correspondant à un type
+  const getDocForType = (typeKey: string) =>
+    documents.find(d => d.name.startsWith(`[${typeKey}]`));
 
-  if (selectedDocType) {
-    setUploadForm({
-      name: selectedDocType,
-      expires_at: '',
-    });
-  } else {
-    setUploadForm({
-      name: file.name,
-      expires_at: '',
-    });
-  }
-};
-
-  const handleUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedFile) return;
-    setUploading(true);
+  const handleUpload = async (typeKey: string, file: File) => {
+    if (!file) return;
+    setUploading(typeKey);
+    setError('');
     try {
       const fd = new FormData();
-      fd.append('file', selectedFile);
-      fd.append('name', uploadForm.name || selectedFile.name);
-      if (uploadForm.expires_at) fd.append('expires_at', uploadForm.expires_at);
+      fd.append('file', file);
+      fd.append('name', `[${typeKey}] ${file.name}`);
+
       const res = await fetch(`${API}/documents/upload`, { method: 'POST', headers, body: fd });
-      if (res.ok) {
-        setSelectedFile(null);
-        setSelectedDocType(null);
-        setUploadForm({ name: '', expires_at: '' });
-        await load();
-      }
-    } finally { setUploading(false); }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      await load();
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors de l\'upload');
+    } finally {
+      setUploading(null);
+      // Reset l'input file pour permettre re-upload du même fichier
+      if (fileRefs.current[typeKey]) fileRefs.current[typeKey]!.value = '';
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -139,245 +92,135 @@ export default function DocumentsPage() {
     setDocuments(prev => prev.filter(d => d.id !== id));
   };
 
-  const expiringDocs = documents.filter(d => d.expires_at && daysUntilExpiry(d.expires_at) <= 30 && daysUntilExpiry(d.expires_at) > 0);
+  const formatSize = (bytes?: number) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} o`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+  };
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
-      <div className="flex items-center justify-between px-8 pt-7 pb-5 border-b border-gray-50 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-2xl bg-orange-50 flex items-center justify-center">
-            <FileText size={18} className="text-orange-500" />
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">Documents</h1>
-            <p className="text-xs text-gray-400">{documents.length} fichier{documents.length > 1 ? 's' : ''}</p>
-          </div>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-8 pt-7 pb-5 border-b border-gray-50 flex-shrink-0">
+        <div className="w-9 h-9 rounded-2xl bg-orange-50 flex items-center justify-center">
+          <FileText size={18} className="text-orange-500" />
         </div>
-        <input ref={fileInputRef} type="file" className="hidden"
-          accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
-          onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])} />
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Documents</h1>
+          <p className="text-xs text-gray-400">
+            {documents.length} document{documents.length !== 1 ? 's' : ''} importé{documents.length !== 1 ? 's' : ''}
+          </p>
+        </div>
       </div>
 
-      <div className="px-8 py-6 space-y-5">
-        {/* Expiry alerts */}
-        {expiringDocs.length > 0 && (
-          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <AlertTriangle size={15} className="text-amber-500" />
-              <span className="text-sm font-medium text-amber-700">Documents expirant bientôt</span>
-            </div>
-            {expiringDocs.map(d => (
-              <div key={d.id} className="flex items-center justify-between text-xs text-amber-600 py-1">
-                <span>{d.name}</span>
-                <span className="font-medium">Expire dans {daysUntilExpiry(d.expires_at!)} jours</span>
-              </div>
-            ))}
+      <div className="px-8 py-6">
+        {error && (
+          <div className="flex items-center gap-2 mb-4 px-4 py-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">
+            <AlertTriangle size={15} />
+            {error}
+            <button onClick={() => setError('')} className="ml-auto"><X size={14} /></button>
           </div>
         )}
 
-        {/* Upload form */}
-        {selectedFile && (
-          <div className="card border-orange-100 bg-orange-50/30">
-            <h3 className="font-medium text-gray-800 mb-3 text-sm flex items-center gap-2">
-              <Upload size={14} className="text-orange-500" />
-              Fichier sélectionné : {selectedFile.name}
-            </h3>
-            <form onSubmit={handleUpload} className="space-y-3">
-              <input type="text" placeholder="Nom du document" value={uploadForm.name}
-                onChange={e => setUploadForm({ ...uploadForm, name: e.target.value })}
-                className="input-field" />
-              <div>
-                <label className="text-xs text-gray-500 block mb-1">Date d'expiration (optionnel)</label>
-                <input type="date" value={uploadForm.expires_at}
-                  onChange={e => setUploadForm({ ...uploadForm, expires_at: e.target.value })}
-                  className="input-field" />
-              </div>
-              <div className="flex gap-2">
-                <button type="submit" disabled={uploading} className="btn-primary flex items-center gap-2">
-                  {uploading ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Upload size={13} />}
-                  {uploading ? 'Envoi...' : 'Envoyer'}
-                </button>
-                <button type="button" onClick={() => setSelectedFile(null)}
-                  className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">Annuler</button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* Drop zone */}
-        <div className="card">
-  <div className="flex items-center justify-between mb-4">
-    <div>
-      <h2 className="font-semibold text-gray-900">
-        Documents requis pour un vol international
-      </h2>
-      <p className="text-xs text-gray-400 mt-1">
-        Importez les documents nécessaires à votre voyage.
-      </p>
-    </div>
-
-    <span className="text-xs text-gray-400">
-      {
-        requiredDocuments.filter(doc =>
-          documents.some(
-            d =>
-              d.name.toLowerCase() ===
-              doc.label.toLowerCase()
-          )
-        ).length
-      }
-      /{requiredDocuments.length}
-    </span>
-  </div>
-
-  <div className="space-y-3">
-    {requiredDocuments.map(doc => {
-      const uploadedDoc = documents.find(
-        d =>
-          d.name.toLowerCase() ===
-          doc.label.toLowerCase()
-      );
-
-      const days =
-        uploadedDoc?.expires_at
-          ? daysUntilExpiry(uploadedDoc.expires_at)
-          : null;
-
-      const expiringSoon =
-        days !== null &&
-        days > 0 &&
-        days <= 30;
-
-      const expired =
-        days !== null &&
-        days <= 0;
-
-      return (
-        <div
-          key={doc.key}
-          className="flex items-center justify-between border border-gray-100 rounded-xl p-4 hover:border-orange-100 transition-colors"
-        >
-          <div className="flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="font-medium text-gray-800">
-                {doc.label}
-              </p>
-
-              {doc.required && (
-                <span className="badge-orange text-xs">
-                  Obligatoire
-                </span>
-              )}
-
-              {uploadedDoc && (
-                <span className="badge-green text-xs">
-                  Importé
-                </span>
-              )}
-
-              {expired && (
-                <span className="badge-red text-xs">
-                  Expiré
-                </span>
-              )}
-
-              {expiringSoon && (
-                <span className="badge-orange text-xs">
-                  Expire dans {days} jours
-                </span>
-              )}
-            </div>
-
-            <p className="text-xs text-gray-400 mt-1">
-              {uploadedDoc
-                ? `Ajouté le ${new Date(
-                    uploadedDoc.created_at
-                  ).toLocaleDateString('fr-FR')}`
-                : 'Document non importé'}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {uploadedDoc && (
-              <a
-                href={`/uploads/documents/${uploadedDoc.file_path}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 rounded-lg hover:bg-orange-50 text-gray-500 hover:text-orange-500"
-              >
-                <Download size={16} />
-              </a>
-            )}
-
-            <button
-              onClick={() => {
-                setSelectedDocType(doc.label);
-                fileInputRef.current?.click();
-              }}
-              className={
-                uploadedDoc
-                  ? 'px-4 py-2 text-sm rounded-xl border border-orange-200 text-orange-600 hover:bg-orange-50'
-                  : 'btn-primary'
-              }
-            >
-              {uploadedDoc
-                ? 'Remplacer'
-                : 'Importer'}
-            </button>
-          </div>
-        </div>
-      );
-    })}
-  </div>
-</div>
-
-        {/* Documents list */}
         {loading ? (
-          <div className="flex justify-center py-10">
+          <div className="flex items-center justify-center py-20">
             <div className="w-6 h-6 border-2 border-orange-200 border-t-orange-500 rounded-full animate-spin" />
           </div>
         ) : (
-          <div className="space-y-2">
-            {documents.map(doc => {
-              const Icon = getFileIcon(doc.mime_type);
-              const days = doc.expires_at ? daysUntilExpiry(doc.expires_at) : null;
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {DOC_TYPES.map(({ key, label, icon: Icon, color, accept }) => {
+              const doc = getDocForType(key);
+              const days = daysUntilExpiry(doc?.expires_at);
+              const isExpiring = days !== null && days <= 30 && days > 0;
               const isExpired = days !== null && days <= 0;
-              const isExpiringSoon = days !== null && days > 0 && days <= 30;
+              const isUploading = uploading === key;
 
               return (
-                <div key={doc.id} className={`card flex items-center gap-4 hover:border-orange-100 transition-colors ${isExpired ? 'opacity-60' : ''}`}>
-                  <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center flex-shrink-0">
-                    <Icon size={18} className="text-orange-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-medium text-gray-800 text-sm truncate">{doc.name}</p>
-                      {isExpired && <span className="badge-red text-xs">Expiré</span>}
-                      {isExpiringSoon && <span className="badge-orange text-xs">Expire dans {days}j</span>}
+                <div key={key} className={`card border ${doc ? 'border-gray-100' : 'border-dashed border-gray-200'} transition-all`}>
+                  {/* Titre du type */}
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center border ${colorMap[color]}`}>
+                      <Icon size={17} />
                     </div>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {formatSize(doc.file_size)}
-                      {doc.expires_at && ` · Exp: ${new Date(doc.expires_at).toLocaleDateString('fr-FR')}`}
-                    </p>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800">{label}</p>
+                      {doc ? (
+                        <p className="text-xs text-gray-400 truncate">
+                          {doc.name.replace(`[${key}] `, '')}
+                          {doc.file_size ? ` · ${formatSize(doc.file_size)}` : ''}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-gray-400">Aucun document</p>
+                      )}
+                    </div>
+
+                    {/* Badge statut */}
+                    {doc && (
+                      <div className="flex-shrink-0">
+                        {isExpired ? (
+                          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-500 border border-red-100">
+                            <AlertTriangle size={10} /> Expiré
+                          </span>
+                        ) : isExpiring ? (
+                          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-500 border border-orange-100">
+                            <Clock size={10} /> {days}j
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 border border-green-100">
+                            <CheckCircle size={10} /> OK
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <a href={`/uploads/documents/${doc.file_path}`} target="_blank" rel="noopener noreferrer"
-                      className="p-2 text-gray-300 hover:text-orange-500 hover:bg-orange-50 rounded-xl transition-all" title="Télécharger">
-                      <Download size={15} />
-                    </a>
-                    <button onClick={() => handleDelete(doc.id)}
-                      className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all" title="Supprimer">
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
+
+                  {/* Document existant */}
+                  {doc && (
+                    <div className="flex items-center gap-2 mb-3 p-2.5 bg-gray-50 rounded-xl text-xs text-gray-500">
+                      <FileText size={12} className="text-gray-400" />
+                      <span className="flex-1 truncate">
+                        Importé le {new Date(doc.created_at).toLocaleDateString('fr-FR')}
+                      </span>
+                      {doc.expires_at && (
+                        <span className={isExpired ? 'text-red-500' : isExpiring ? 'text-orange-500' : ''}>
+                          Exp. {new Date(doc.expires_at).toLocaleDateString('fr-FR')}
+                        </span>
+                      )}
+                      <button onClick={() => handleDelete(doc.id)}
+                        className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all ml-1">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Bouton import */}
+                  <input
+                    type="file"
+                    accept={accept}
+                    className="hidden"
+                    ref={el => { fileRefs.current[key] = el; }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(key, f); }}
+                  />
+                  <button
+                    onClick={() => fileRefs.current[key]?.click()}
+                    disabled={isUploading}
+                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all border ${
+                      doc
+                        ? 'border-gray-200 text-gray-500 hover:border-orange-300 hover:text-orange-500 hover:bg-orange-50'
+                        : `border-dashed ${colorMap[color]} hover:opacity-80`
+                    }`}
+                  >
+                    {isUploading ? (
+                      <div className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                    ) : (
+                      <Upload size={14} />
+                    )}
+                    {isUploading ? 'Import en cours...' : doc ? 'Remplacer' : 'Importer'}
+                  </button>
                 </div>
               );
             })}
-            {documents.length === 0 && !selectedFile && (
-              <div className="text-center py-10">
-                <p className="text-sm text-gray-400">Aucun document importé</p>
-              </div>
-            )}
           </div>
         )}
       </div>

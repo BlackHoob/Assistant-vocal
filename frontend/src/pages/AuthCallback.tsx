@@ -1,37 +1,32 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getMe, getJWT } from '../lib/appwrite';
-import { Mic } from 'lucide-react';
 
 export default function AuthCallback() {
-  const { setUser, setJwt } = useAuth();
+  const { setAuth } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    (async () => {
-      try {
-        const user = await getMe();
-        if (user) {
-          const jwt = await getJWT();
-          setUser(user as any);
-          setJwt(jwt);
-          navigate('/');
-        } else {
-          navigate('/login');
-        }
-      } catch {
-        navigate('/login');
-      }
-    })();
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const name  = params.get('name')  || '';
+    const email = params.get('email') || '';
+    const id    = parseInt(params.get('id') || '0');
+    const error = params.get('error');
+
+    if (error || !token) {
+      navigate('/login?error=google');
+      return;
+    }
+
+    setAuth(token, { id, name, email });
+    navigate('/');
   }, []);
 
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center">
+    <div className="min-h-screen flex items-center justify-center bg-white">
       <div className="text-center">
-        <div className="w-16 h-16 rounded-3xl bg-orange-500 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-orange-500/30 animate-pulse">
-          <Mic size={28} className="text-white" />
-        </div>
+        <div className="w-8 h-8 border-2 border-orange-200 border-t-orange-500 rounded-full animate-spin mx-auto mb-3" />
         <p className="text-sm text-gray-400">Connexion en cours...</p>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAdminApi } from '../../hooks/useadminapi';
+import { useAdminApi } from '../../hooks/useAdminApi';
 import { Calendar, Trash2 } from 'lucide-react';
 
 export default function AdminAppointmentsPage() {
@@ -34,16 +34,16 @@ export default function AdminAppointmentsPage() {
   };
 
   return (
-    <div className="p-8 text-gray-200">
+    <div className="p-8 text-gray-800">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
+          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <Calendar size={20} className="text-orange-400" /> Rendez-vous
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">{data.total} au total</p>
         </div>
         <select value={status} onChange={e => { setStatus(e.target.value); load(e.target.value); }}
-          className="px-4 py-2 bg-gray-800 border border-gray-700 rounded-xl text-sm text-gray-300 outline-none focus:border-orange-500">
+          className="px-4 py-2 bg-gray-50 border border-gray-700 rounded-xl text-sm text-gray-600 outline-none focus:border-orange-500">
           <option value="">Tous les statuts</option>
           <option value="upcoming">À venir</option>
           <option value="completed">Terminés</option>
@@ -51,10 +51,10 @@ export default function AdminAppointmentsPage() {
         </select>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+      <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-gray-800">
+            <tr className="border-b border-gray-100">
               {['Titre', 'Utilisateur', 'Date & Heure', 'Lieu', 'Statut', ''].map(h => (
                 <th key={h} className="text-left text-xs text-gray-500 font-medium px-5 py-3">{h}</th>
               ))}
@@ -64,10 +64,10 @@ export default function AdminAppointmentsPage() {
             {loading ? (
               <tr><td colSpan={6} className="text-center py-10 text-gray-600">Chargement...</td></tr>
             ) : data.appointments.map((a: any) => (
-              <tr key={a.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                <td className="px-5 py-3 text-sm font-medium text-gray-200">{a.title}</td>
-                <td className="px-5 py-3 text-sm text-gray-400">{a.userName || <span className="text-gray-600 italic">—</span>}</td>
-                <td className="px-5 py-3 text-sm text-gray-400">
+              <tr key={a.id} className="border-b border-gray-100 hover:bg-orange-50/30 transition-colors">
+                <td className="px-5 py-3 text-sm font-medium text-gray-800">{a.title}</td>
+                <td className="px-5 py-3 text-sm text-gray-500">{a.userName || <span className="text-gray-600 italic">—</span>}</td>
+                <td className="px-5 py-3 text-sm text-gray-500">
                   {a.dateTime ? new Date(a.dateTime).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
                 </td>
                 <td className="px-5 py-3 text-sm text-gray-500">{a.location || '—'}</td>

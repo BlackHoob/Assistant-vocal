@@ -2,10 +2,11 @@ import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import Layout from './components/Layout';
-import AdminLayout from './components/AdminLayout';
+import AdminLayout from './components/Adminlayout';
 import IAPage from './pages/IAPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import AuthCallback from './pages/AuthCallback';
 import AppointmentsPage from './pages/AppointmentsPage';
 import DocumentsPage from './pages/DocumentsPage';
 import TicketsPage from './pages/TicketsPage';
@@ -47,6 +48,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
         <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route index element={<IAPage />} />
           <Route path="rendez-vous" element={<AppointmentsPage />} />
