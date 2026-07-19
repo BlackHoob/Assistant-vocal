@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useState, useEffect } from 'react';
 import { useApi } from '../hooks/useApi';
 import { Ticket, Plus, Trash2, ArrowRight, Search, Plane, Clock, AlertCircle, X, CheckCircle } from 'lucide-react';
@@ -15,29 +16,35 @@ interface SavedTicket {
   status: 'upcoming' | 'completed' | 'cancelled';
 }
 
-interface FlightResult {
-  flightNumber: string;
+interface FlightOffer {
+  id: string;
   airline: string;
+  airlineLogo: string;
+  flightNumber: string;
   origin: string;
   destination: string;
   departureDate: string;
   arrivalDate: string;
-  status: string;
-  terminal: string;
-  gate: string;
-  delay: number;
-  _demo?: boolean;
+  duration: string;
+  stops: number;
+  cabinClass: string;
+  price: number;
+  currency: string;
+  expiresAt: string;
 }
 
 export default function TicketsPage() {
+  const { t } = useTranslation();
   const api = useApi();
   const [tickets, setTickets] = useState<SavedTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'mine' | 'search'>('mine');
 
   // Recherche
-  const [searchForm, setSearchForm] = useState({ flightNumber: '', date: '' });
-  const [results, setResults] = useState<FlightResult[]>([]);
+  const [searchForm, setSearchForm] = useState({
+    origin: '', destination: '', date: '', passengers: 1, cabinClass: 'economy',
+  });
+  const [results, setResults] = useState<FlightOffer[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [saving, setSaving] = useState<string | null>(null);
@@ -60,15 +67,14 @@ export default function TicketsPage() {
     try {
       const data = await api.post('/tickets/search', searchForm);
       setResults(Array.isArray(data) ? data : []);
-      if (!data.length) setSearchError('Aucun vol trouvé pour ce numéro.');
+      if (!data.length) setSearchError(t('tkt_no_result'));
     } catch (err: any) {
       setSearchError(err.message || 'Erreur lors de la recherche');
     } finally { setSearching(false); }
   };
 
-  const handleSave = async (flight: FlightResult) => {
-    const key = flight.flightNumber + flight.departureDate;
-    setSaving(key);
+  const handleSave = async (flight: FlightOffer) => {
+    setSaving(flight.id);
     try {
       await api.post('/tickets', {
         flightNumber:  flight.flightNumber,
@@ -77,10 +83,10 @@ export default function TicketsPage() {
         destination:   flight.destination,
         departureDate: flight.departureDate,
         arrivalDate:   flight.arrivalDate,
-        price:         0,
-        currency:      'EUR',
+        price:         flight.price,
+        currency:      flight.currency,
       });
-      setSaved(key);
+      setSaved(flight.id);
       setTimeout(() => setSaved(null), 2000);
       await load();
     } finally { setSaving(null); }
@@ -99,12 +105,16 @@ export default function TicketsPage() {
     } catch { return dt; }
   };
 
+  const formatPrice = (price: number, currency: string) => {
+    try {
+      return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: currency || 'EUR' }).format(price);
+    } catch { return `${price} ${currency}`; }
+  };
+
   const statusBadge = (status: string) => {
     if (status === 'upcoming') return <span className="badge-orange text-xs">À venir</span>;
     if (status === 'completed') return <span className="badge-green text-xs">Terminé</span>;
     if (status === 'cancelled') return <span className="badge-red text-xs">Annulé</span>;
-    if (status === 'active') return <span className="badge-green text-xs">En vol</span>;
-    if (status === 'delayed') return <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-600 border border-yellow-100">Retardé</span>;
     return <span className="badge-gray text-xs">{status}</span>;
   };
 
@@ -127,8 +137,8 @@ export default function TicketsPage() {
       {/* Tabs */}
       <div className="flex gap-1 px-8 pt-4 pb-0">
         {[
-          { key: 'mine', label: 'Mes billets', icon: Ticket },
-          { key: 'search', label: 'Rechercher un vol', icon: Search },
+          { key: 'mine', label: t('tkt_mine'), icon: Ticket },
+          { key: 'search', label: t('tkt_search'), icon: Search },
         ].map(({ key, label, icon: Icon }) => (
           <button key={key} onClick={() => setTab(key as any)}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
@@ -168,8 +178,8 @@ export default function TicketsPage() {
                       <div key={t.id} className="card hover:border-orange-100 transition-colors">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-2 flex-wrap">
-                              <span className="text-base font-bold text-gray-900 flex items-center gap-2">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                                 {t.origin}
                                 <ArrowRight size={14} className="text-orange-400" />
                                 {t.destination}
@@ -184,6 +194,9 @@ export default function TicketsPage() {
                                   <Clock size={10} className="text-orange-400" />
                                   {formatDate(t.departureDate)}
                                 </span>
+                              )}
+                              {t.price > 0 && (
+                                <span className="font-semibold text-gray-700">{formatPrice(t.price, t.currency)}</span>
                               )}
                             </div>
                           </div>
@@ -231,21 +244,45 @@ export default function TicketsPage() {
         {tab === 'search' && (
           <div className="space-y-5">
             <form onSubmit={handleSearch} className="card border-orange-100 bg-orange-50/30 space-y-3">
-              <h3 className="text-sm font-medium text-gray-800">Recherche par numéro de vol</h3>
-              <p className="text-xs text-gray-400">Entrez le numéro de vol IATA (ex : AF447, LH100, TU714)</p>
+              <h3 className="text-sm font-medium text-gray-800">Recherche de vols</h3>
+              <p className="text-xs text-gray-400">Codes IATA aéroport ou ville (ex : CDG, JFK, NYC)</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-gray-500 block mb-1">Numéro de vol</label>
-                  <input type="text" placeholder="ex : AF447"
-                    value={searchForm.flightNumber}
-                    onChange={e => setSearchForm({ ...searchForm, flightNumber: e.target.value.toUpperCase() })}
-                    className="input-field uppercase font-mono tracking-widest" required />
+                  <label className="text-xs text-gray-500 block mb-1">Origine</label>
+                  <input type="text" placeholder="ex : CDG"
+                    value={searchForm.origin}
+                    onChange={e => setSearchForm({ ...searchForm, origin: e.target.value.toUpperCase() })}
+                    className="input-field uppercase font-mono tracking-widest" required maxLength={3} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 block mb-1">Date (optionnel)</label>
+                  <label className="text-xs text-gray-500 block mb-1">Destination</label>
+                  <input type="text" placeholder="ex : JFK"
+                    value={searchForm.destination}
+                    onChange={e => setSearchForm({ ...searchForm, destination: e.target.value.toUpperCase() })}
+                    className="input-field uppercase font-mono tracking-widest" required maxLength={3} />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Date de départ</label>
                   <input type="date" value={searchForm.date}
                     onChange={e => setSearchForm({ ...searchForm, date: e.target.value })}
+                    className="input-field" required />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Passagers</label>
+                  <input type="number" min={1} max={9} value={searchForm.passengers}
+                    onChange={e => setSearchForm({ ...searchForm, passengers: parseInt(e.target.value) || 1 })}
                     className="input-field" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs text-gray-500 block mb-1">Classe</label>
+                  <select value={searchForm.cabinClass}
+                    onChange={e => setSearchForm({ ...searchForm, cabinClass: e.target.value })}
+                    className="input-field">
+                    <option value="economy">Économique</option>
+                    <option value="premium_economy">Premium économique</option>
+                    <option value="business">Affaires</option>
+                    <option value="first">Première</option>
+                  </select>
                 </div>
               </div>
               <button type="submit" disabled={searching}
@@ -253,7 +290,7 @@ export default function TicketsPage() {
                 {searching
                   ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   : <Search size={14} />}
-                {searching ? 'Recherche...' : 'Rechercher'}
+                {searching ? t('tkt_searching') : t('tkt_search')}
               </button>
             </form>
 
@@ -267,20 +304,13 @@ export default function TicketsPage() {
 
             {results.length > 0 && (
               <div>
-                {results[0]?._demo && (
-                  <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-yellow-50 text-yellow-700 text-xs rounded-xl border border-yellow-100">
-                    <AlertCircle size={13} />
-                    Données de démonstration — l'API Aviationstack plan gratuit ne retourne pas de vols réels en ce moment.
-                  </div>
-                )}
-                <p className="text-xs text-gray-400 mb-3">{results.length} vol{results.length > 1 ? 's' : ''} trouvé{results.length > 1 ? 's' : ''}</p>
+                <p className="text-xs text-gray-400 mb-3">{results.length} offre{results.length > 1 ? 's' : ''} trouvée{results.length > 1 ? 's' : ''} · triées par prix</p>
                 <div className="space-y-3">
-                  {results.map((f, i) => {
-                    const key = f.flightNumber + f.departureDate;
-                    const isSaving = saving === key;
-                    const isSaved = saved === key;
+                  {results.map((f) => {
+                    const isSaving = saving === f.id;
+                    const isSaved = saved === f.id;
                     return (
-                      <div key={i} className="card hover:border-orange-100 transition-colors">
+                      <div key={f.id} className="card hover:border-orange-100 transition-colors">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -295,11 +325,10 @@ export default function TicketsPage() {
                                 </span>
                               )}
                               <span className={`text-xs px-2 py-0.5 rounded-full border ${
-                                f.status === 'active' ? 'bg-green-50 text-green-600 border-green-100' :
-                                f.status === 'delayed' ? 'bg-yellow-50 text-yellow-600 border-yellow-100' :
-                                f.status === 'cancelled' ? 'bg-red-50 text-red-500 border-red-100' :
-                                'bg-gray-50 text-gray-500 border-gray-100'
-                              }`}>{f.status}</span>
+                                f.stops === 0 ? 'bg-green-50 text-green-600 border-green-100' : 'bg-gray-50 text-gray-500 border-gray-100'
+                              }`}>
+                                {f.stops === 0 ? 'Direct' : `${f.stops} escale${f.stops > 1 ? 's' : ''}`}
+                              </span>
                             </div>
                             <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
                               {f.airline && <span>{f.airline}</span>}
@@ -309,26 +338,28 @@ export default function TicketsPage() {
                                   Départ : {formatDate(f.departureDate)}
                                 </span>
                               )}
-                              {f.arrivalDate && (
-                                <span>Arrivée : {formatDate(f.arrivalDate)}</span>
-                              )}
-                              {f.terminal && <span>Terminal {f.terminal}</span>}
-                              {f.gate && <span>Porte {f.gate}</span>}
-                              {f.delay > 0 && (
-                                <span className="text-yellow-600 font-medium">+{f.delay} min</span>
+                              {f.arrivalDate && <span>Arrivée : {formatDate(f.arrivalDate)}</span>}
+                              {f.duration && (
+                                <span className="flex items-center gap-1">
+                                  <Clock size={10} className="text-orange-400" />
+                                  {f.duration}
+                                </span>
                               )}
                             </div>
                           </div>
-                          <button onClick={() => handleSave(f)} disabled={isSaving || isSaved}
-                            className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
-                              isSaved ? 'bg-green-50 text-green-600 border border-green-100' :
-                              'btn-primary'
-                            }`}>
-                            {isSaving
-                              ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              : isSaved ? <CheckCircle size={13} /> : <Plus size={13} />}
-                            {isSaved ? 'Enregistré' : 'Enregistrer'}
-                          </button>
+                          <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                            <span className="text-base font-bold text-gray-900">{formatPrice(f.price, f.currency)}</span>
+                            <button onClick={() => handleSave(f)} disabled={isSaving || isSaved}
+                              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+                                isSaved ? 'bg-green-50 text-green-600 border border-green-100' :
+                                'btn-primary'
+                              }`}>
+                              {isSaving
+                                ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                : isSaved ? <CheckCircle size={13} /> : <Plus size={13} />}
+                              {isSaved ? t('tkt_saved') : t('tkt_save')}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );

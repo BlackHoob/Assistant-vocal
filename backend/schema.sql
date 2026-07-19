@@ -103,3 +103,15 @@ CREATE TABLE chat_messages (
 
 SELECT 'nestor_vocal créée ✓' AS statut;
 SHOW TABLES;
+
+
+CREATE TABLE IF NOT EXISTS waitlist (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  userId     INT NOT NULL,
+  name       VARCHAR(255) NOT NULL,
+  date       DATE NOT NULL,
+  quantity   INT DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_user_date (userId, date)
+);

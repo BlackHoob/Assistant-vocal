@@ -22,6 +22,7 @@ export const useApi = () => {
     get: (ep: string) => request(ep),
     post: (ep: string, body: any) => request(ep, { method: 'POST', body: JSON.stringify(body) }),
     put: (ep: string, body: any) => request(ep, { method: 'PUT', body: JSON.stringify(body) }),
+    patch: (ep: string, body?: any) => request(ep, { method: 'PATCH', body: body !== undefined ? JSON.stringify(body) : undefined }),
     del: (ep: string) => request(ep, { method: 'DELETE' }),
     upload: (ep: string, fd: FormData) => request(ep, { method: 'POST', body: fd }),
   };

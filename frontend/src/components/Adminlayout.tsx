@@ -7,11 +7,14 @@ import { LayoutDashboard, Users, Calendar, Ticket, Shield, LogOut, Mic, ArrowLef
          CalendarClock, FileWarning, Plane, Info } from 'lucide-react';
 
 const LANGUAGES = [
-  { code: 'fr', label: 'Français', flag: '🇫🇷' },
-  { code: 'en', label: 'English',  flag: '🇬🇧' },
-  { code: 'ar', label: 'العربية',  flag: '🇲🇦' },
-  { code: 'es', label: 'Español',  flag: '🇪🇸' },
-  { code: 'pt', label: 'Português',flag: '🇧🇷' },
+  { code: 'fr',  label: 'Français',  flag: '🇫🇷' },
+  { code: 'en',  label: 'English',   flag: '🇬🇧' },
+  { code: 'ar',  label: 'العربية',   flag: '🇲🇦' },
+  { code: 'es',  label: 'Español',   flag: '🇪🇸' },
+  { code: 'pt',  label: 'Português', flag: '🇧🇷' },
+  { code: 'dyu', label: 'Dioula',    flag: '🇨🇮' },
+  { code: 'bm',  label: 'Bambara',   flag: '🇲🇱' },
+  { code: 'wo',  label: 'Wolof',     flag: '🇸🇳' },
 ];
 
 const navItems = [

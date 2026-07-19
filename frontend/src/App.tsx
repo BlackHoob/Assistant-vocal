@@ -17,6 +17,7 @@ import AdminUsersPage from './pages/admin/AdminUsersPage';
 import AdminAppointmentsPage from './pages/admin/AdminAppointmentsPage';
 import AdminTicketsPage from './pages/admin/AdminTicketsPage';
 import AdminAdminsPage from './pages/admin/AdminAdminsPage';
+import HomePage from './pages/HomePage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
@@ -46,11 +47,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        
         <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
         <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route index element={<IAPage />} />
+          <Route index element={<HomePage />} />
+          <Route path="assistant" element={<IAPage />} />
           <Route path="rendez-vous" element={<AppointmentsPage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="billets" element={<TicketsPage />} />

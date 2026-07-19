@@ -5,14 +5,17 @@ import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
 import { Bot, Calendar, FileText, Ticket, User, LogOut, Mic, Shield,
          Languages, Moon, Sun, Bell, BellOff, Check, X, Menu,
-         CalendarClock, FileWarning, Plane, Info } from 'lucide-react';
+         CalendarClock, FileWarning, Plane, Info, Home } from 'lucide-react';
 
 const LANGUAGES = [
-  { code: 'fr', label: 'Français', flag: '🇫🇷' },
-  { code: 'en', label: 'English',  flag: '🇬🇧' },
-  { code: 'ar', label: 'العربية',  flag: '🇲🇦' },
-  { code: 'es', label: 'Español',  flag: '🇪🇸' },
-  { code: 'pt', label: 'Português',flag: '🇧🇷' },
+  { code: 'fr',  label: 'Français',  flag: '🇫🇷' },
+  { code: 'en',  label: 'English',   flag: '🇬🇧' },
+  { code: 'ar',  label: 'العربية',   flag: '🇲🇦' },
+  { code: 'es',  label: 'Español',   flag: '🇪🇸' },
+  { code: 'pt',  label: 'Português', flag: '🇧🇷' },
+  { code: 'dyu', label: 'Dioula',    flag: '🇨🇮' },
+  { code: 'bm',  label: 'Bambara',   flag: '🇲🇱' },
+  { code: 'wo',  label: 'Wolof',     flag: '🇸🇳' },
 ];
 
 export default function Layout() {
@@ -21,7 +24,8 @@ export default function Layout() {
   const navigate = useNavigate();
 
   const navItems = [
-    { to: '/',            icon: Bot,      label: t('nav_ia'),           end: true },
+    { to: '/',            icon: Home,     label: t('nav_home'),         end: true },
+    { to: '/assistant',   icon: Bot,      label: t('nav_ia')                      },
     { to: '/rendez-vous', icon: Calendar, label: t('nav_appointments') },
     { to: '/documents',   icon: FileText, label: t('nav_documents')    },
     { to: '/billets',     icon: Ticket,   label: t('nav_tickets')      },
@@ -57,6 +61,16 @@ export default function Layout() {
   const notifRef = useRef<HTMLDivElement>(null);
   const { notifications, unread, markRead, markAllRead, dismiss, refresh } = useNotifications(notifEnabled);
   const toggleNotif = () => { setNotifEnabled(p => { localStorage.setItem('notif', String(!p)); return !p; }); };
+
+  // Ouvre le panneau ET marque tout comme lu : le badge repasse à 0
+  // jusqu'à la prochaine vraie notification reçue.
+  const openNotifPanel = () => {
+    setShowNotif(prev => {
+      const next = !prev;
+      if (next) { refresh(); markAllRead(); }
+      return next;
+    });
+  };
 
   const categoryIcon = (cat: string) => {
     if (cat === 'appointment') return <CalendarClock size={13} className="flex-shrink-0" />;
@@ -175,7 +189,7 @@ export default function Layout() {
 
           {/* Notifications */}
           <div ref={notifRef} className="relative">
-            <button onClick={() => { setShowNotif(!showNotif); if (!showNotif) refresh(); }}
+            <button onClick={openNotifPanel}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm w-full transition-all ${
                 dark ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                 : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
@@ -239,24 +253,33 @@ export default function Layout() {
       </nav>
 
       {/* Profil + déconnexion */}
-      <div className={`border-t pt-4 mt-2 ${dark ? 'border-gray-800' : 'border-gray-50'}`}>
-        {user && (
-          <div className="flex items-center gap-3 px-3 mb-3">
-            <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
-              <span className="text-orange-600 text-xs font-semibold">{initials}</span>
-            </div>
-            <div className="min-w-0">
-              <p className={`text-sm font-medium truncate ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{user.name}</p>
-              <p className="text-xs text-gray-400 truncate">{user.email}</p>
-            </div>
-          </div>
-        )}
-        <button onClick={handleLogout}
-          className="flex items-center gap-3 px-3 py-2 text-sm text-gray-400 hover:text-red-500 w-full rounded-xl hover:bg-red-50 transition-all">
-          <LogOut size={15} />
-          {t('nav_logout')}
-        </button>
+<div className={`border-t pt-4 mt-2 ${dark ? 'border-gray-800' : 'border-gray-50'}`}>
+  {user && (
+    <div className="flex items-center gap-3 px-3 mb-3">
+      {/* Avatar dynamique */}
+      {user.avatar ? (
+        <img
+          src={`${import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:4000'}/uploads/avatars/${user.avatar}`}
+          alt="avatar"
+          className="w-8 h-8 rounded-full object-cover flex-shrink-0 border border-gray-100"
+        />
+      ) : (
+        <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
+          <span className="text-orange-600 text-xs font-semibold">{initials}</span>
+        </div>
+      )}
+      <div className="min-w-0">
+        <p className={`text-sm font-medium truncate ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{user.name}</p>
+        <p className="text-xs text-gray-400 truncate">{user.email}</p>
       </div>
+    </div>
+  )}
+  <button onClick={handleLogout}
+    className="flex items-center gap-3 px-3 py-2 text-sm text-gray-400 hover:text-red-500 w-full rounded-xl hover:bg-red-50 transition-all">
+    <LogOut size={15} />
+    {t('nav_logout')}
+  </button>
+</div>
     </>
   );
 
@@ -306,7 +329,7 @@ export default function Layout() {
             {/* Badge notif mobile */}
             {unread > 0 && notifEnabled && (
               <div className="relative">
-                <button onClick={() => { setShowNotif(!showNotif); refresh(); }}
+                <button onClick={openNotifPanel}
                   className="p-2 rounded-xl text-gray-500 hover:bg-gray-50">
                   <Bell size={18} />
                   <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-orange-500 text-white text-xs flex items-center justify-center font-bold">
