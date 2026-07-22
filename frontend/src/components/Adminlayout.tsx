@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
 import { LayoutDashboard, Users, Calendar, Ticket, Shield, LogOut, Mic, ArrowLeft,
-         Languages, Moon, Sun, Bell, BellOff, Check, X, Menu,
+         Languages, Moon, Sun, Bell, BellOff, Check, X, Menu, Send, FileText, CalendarDays,
          CalendarClock, FileWarning, Plane, Info } from 'lucide-react';
 
 const LANGUAGES = [
@@ -18,11 +18,14 @@ const LANGUAGES = [
 ];
 
 const navItems = [
-  { to: '/admin',              icon: LayoutDashboard, label: 'Dashboard',      end: true },
-  { to: '/admin/users',        icon: Users,           label: 'Utilisateurs'            },
-  { to: '/admin/appointments', icon: Calendar,        label: 'Rendez-vous'             },
-  { to: '/admin/tickets',      icon: Ticket,          label: 'Billets'                 },
-  { to: '/admin/admins',       icon: Shield,          label: 'Administrateurs'         },
+  { to: '/admin',                       icon: LayoutDashboard, label: 'Dashboard',          end: true },
+  { to: '/admin/users',                 icon: Users,           label: 'Utilisateurs'                 },
+  { to: '/admin/appointments',          icon: Calendar,        label: 'Rendez-vous',        end: true },
+  { to: '/admin/appointments/semaine',  icon: CalendarDays,    label: 'Liste hebdomadaire'           },
+  { to: '/admin/tickets',               icon: Ticket,          label: 'Billets'                      },
+  { to: '/admin/messages',              icon: Send,            label: 'Messages'                     },
+  { to: '/admin/documents',             icon: FileText,        label: 'Documents'                    },
+  { to: '/admin/admins',                icon: Shield,          label: 'Administrateurs'              },
 ];
 
 export default function AdminLayout() {

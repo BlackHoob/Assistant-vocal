@@ -52,3 +52,15 @@ profileRouter.post('/avatar', upload.single('avatar'), async (req: AuthRequest, 
     res.json({ avatar: req.file.filename, url: `/uploads/avatars/${req.file.filename}` });
   } catch (err: any) { res.status(500).json({ message: err.message }); }
 });
+
+profileRouter.delete('/avatar', async (req: AuthRequest, res: Response) => {
+  try {
+    const [old]: any = await pool.query('SELECT avatar FROM users WHERE id = ?', [req.user!.id]);
+    if (old[0]?.avatar) {
+      const oldPath = path.join(__dirname, '../../uploads/avatars', old[0].avatar);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }   
+    await pool.query('UPDATE users SET avatar = NULL WHERE id = ?', [req.user!.id]);
+    res.json({ message: 'Avatar supprimé' });
+  } catch (err: any) { res.status(500).json({ message: err.message }); }
+});

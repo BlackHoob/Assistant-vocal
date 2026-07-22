@@ -63,6 +63,7 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const headers = { Authorization: `Bearer ${token}` };
@@ -111,11 +112,11 @@ export default function DocumentsPage() {
     setDocuments(prev => prev.filter(d => d.id !== id));
   };
 
+  const fileUrl = (doc: Document) =>
+    doc.file_path.startsWith('http') ? doc.file_path : `${API.replace('/api', '')}${doc.file_path}`;
+
   const handleDownload = (doc: Document) => {
-    const url = doc.file_path.startsWith('http')
-      ? doc.file_path
-      : `${API.replace('/api', '')}${doc.file_path}`;
-    window.open(url, '_blank');
+    window.open(fileUrl(doc), '_blank');
   };
 
   return (
@@ -247,7 +248,10 @@ export default function DocumentsPage() {
 
                       {/* Info document existant */}
                       {doc && (
-                        <div className="flex items-center gap-2 mb-3 p-2.5 bg-gray-50 rounded-xl text-xs text-gray-500">
+                        <div
+                          onClick={() => setPreviewDoc(doc)}
+                          className="flex items-center gap-2 mb-3 p-2.5 bg-gray-50 rounded-xl text-xs text-gray-500 cursor-pointer hover:bg-orange-50 transition-colors"
+                        >
                           <FileText size={12} className="text-gray-400" />
                           <span className="flex-1 truncate">
                             Importé le {new Date(doc.created_at).toLocaleDateString('fr-FR')}
@@ -258,7 +262,7 @@ export default function DocumentsPage() {
                             </span>
                           )}
                           <button
-                            onClick={() => handleDelete(doc.id)}
+                            onClick={e => { e.stopPropagation(); handleDelete(doc.id); }}
                             className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all ml-1"
                           >
                             <Trash2 size={12} />
@@ -321,7 +325,8 @@ export default function DocumentsPage() {
                       return (
                         <div
                           key={doc.id}
-                          className="card border border-gray-100 flex items-center gap-4 hover:border-orange-200 transition-all group"
+                          onClick={() => setPreviewDoc(doc)}
+                          className="card border border-gray-100 flex items-center gap-4 hover:border-orange-200 transition-all group cursor-pointer"
                         >
                           {/* Icône */}
                           <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center flex-shrink-0 border border-orange-100">
@@ -365,7 +370,7 @@ export default function DocumentsPage() {
 
                           {/* Bouton télécharger */}
                           <button
-                            onClick={() => handleDownload(doc)}
+                            onClick={e => { e.stopPropagation(); handleDownload(doc); }}
                             className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-gray-500 border border-gray-200 hover:border-orange-300 hover:text-orange-500 hover:bg-orange-50 transition-all"
                           >
                             <Download size={13}/>
@@ -381,6 +386,58 @@ export default function DocumentsPage() {
           </>
         )}
       </div>
+
+      {/* ── Modale d'aperçu ── */}
+      {previewDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPreviewDoc(null)} />
+          <div className="relative z-10 bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+            {/* En-tête */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">{previewDoc.name}</p>
+                <p className="text-xs text-gray-400">
+                  {new Date(previewDoc.created_at).toLocaleDateString('fr-FR')}
+                  {previewDoc.file_size ? ` · ${formatSize(previewDoc.file_size)}` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => handleDownload(previewDoc)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-gray-500 border border-gray-200 hover:border-orange-300 hover:text-orange-500 hover:bg-orange-50 transition-all"
+                >
+                  <Download size={13} /> Télécharger
+                </button>
+                <button onClick={() => setPreviewDoc(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg transition-colors">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Contenu */}
+            <div className="flex-1 overflow-auto bg-gray-50 flex items-center justify-center p-4">
+              {previewDoc.mime_type?.startsWith('image/') ? (
+                <img src={fileUrl(previewDoc)} alt={previewDoc.name} className="max-w-full max-h-[65vh] object-contain rounded-lg" />
+              ) : previewDoc.mime_type === 'application/pdf' ? (
+                <iframe src={fileUrl(previewDoc)} title={previewDoc.name} className="w-full h-[65vh] rounded-lg border border-gray-200 bg-white" />
+              ) : (
+                <div className="flex flex-col items-center gap-3 py-10 text-center">
+                  <div className="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center">
+                    <FileText size={24} className="text-orange-400" />
+                  </div>
+                  <p className="text-sm text-gray-500">Aperçu non disponible pour ce type de fichier.</p>
+                  <button
+                    onClick={() => handleDownload(previewDoc)}
+                    className="btn-primary flex items-center gap-2 mt-1"
+                  >
+                    <Download size={14} /> Télécharger le fichier
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

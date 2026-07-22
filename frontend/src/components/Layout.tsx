@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
-import { Bot, Calendar, FileText, Ticket, User, LogOut, Mic, Shield,
+import { Bot, Calendar, FileText, Ticket, User, LogOut, Mic,
          Languages, Moon, Sun, Bell, BellOff, Check, X, Menu,
          CalendarClock, FileWarning, Plane, Info, Home } from 'lucide-react';
 
@@ -20,7 +20,7 @@ const LANGUAGES = [
 
 export default function Layout() {
   const { t, i18n } = useTranslation();
-  const { logout, user, isAdmin } = useAuth();
+  const { logout, user } = useAuth();
   const navigate = useNavigate();
 
   const navItems = [
@@ -128,17 +128,6 @@ export default function Layout() {
             )}
           </NavLink>
         ))}
-
-        {isAdmin() && (
-          <NavLink to="/admin" onClick={onNav} className={({ isActive }) =>
-            `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all mt-2 border ${
-              isActive ? 'bg-orange-500 text-white border-orange-500'
-              : 'text-orange-500 border-orange-200 hover:bg-orange-50'
-            }`}>
-            <Shield size={15} />
-            {t('nav_admin')}
-          </NavLink>
-        )}
 
         {/* Outils */}
         <div className={`mt-4 pt-4 border-t ${dark ? 'border-gray-800' : 'border-gray-100'} flex flex-col gap-0.5`}>

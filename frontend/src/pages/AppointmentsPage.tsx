@@ -35,7 +35,9 @@ export default function AppointmentsPage() {
   const api = useApi();
   const { user } = useAuth();
 
-  const [tab, setTab] = useState<'upcoming' | 'past' | 'waitlist'>('upcoming');
+  const [tab, setTab] = useState<'upcoming' | 'past' | 'waitlist'>(
+    () => (localStorage.getItem('nestor_waitlist_date') ? 'waitlist' : 'upcoming')
+  );
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -47,13 +49,14 @@ export default function AppointmentsPage() {
   const [takenSlots, setTakenSlots] = useState<string[]>([]);
   const [checkingSlot, setCheckingSlot] = useState(false);
 
-  // Liste d'attente
-  const [waitlistDate, setWaitlistDate] = useState('');
+  // Liste d'attente — la date est mémorisée pour survivre à un changement de page
+  const [waitlistDate, setWaitlistDate] = useState(() => localStorage.getItem('nestor_waitlist_date') || '');
   const [myWaitlist, setMyWaitlist] = useState<WaitlistEntry | null>(null);
   const [waitlistLoading, setWaitlistLoading] = useState(false);
   const [waitlistForm, setWaitlistForm] = useState({ name: user?.name || '', quantity: '1' });
   const [waitlistError, setWaitlistError] = useState('');
   const [waitlistSubmitting, setWaitlistSubmitting] = useState(false);
+  const [justLeft, setJustLeft] = useState(false);
 
   const load = async () => {
     try {
@@ -70,13 +73,23 @@ export default function AppointmentsPage() {
   }, [user]);
 
   // Charger la liste d'attente du jour sélectionné
-  useEffect(() => {
-    if (!waitlistDate) return;
+  const loadMyWaitlist = (date: string) => {
     setWaitlistLoading(true);
-    api.get(`/appointments/waitlist/me?date=${waitlistDate}`)
-      .then(data => setMyWaitlist(data))
+    return api.get(`/appointments/waitlist/me?date=${date}`)
+      .then(data => setMyWaitlist(data || null))
       .catch(() => setMyWaitlist(null))
       .finally(() => setWaitlistLoading(false));
+  };
+
+  useEffect(() => {
+    if (!waitlistDate) return;
+    loadMyWaitlist(waitlistDate);
+  }, [waitlistDate]);
+
+  // Mémorise la date choisie pour la retrouver si on quitte puis revient sur la page
+  useEffect(() => {
+    if (waitlistDate) localStorage.setItem('nestor_waitlist_date', waitlistDate);
+    else localStorage.removeItem('nestor_waitlist_date');
   }, [waitlistDate]);
 
   // Vérification créneau
@@ -146,18 +159,33 @@ export default function AppointmentsPage() {
         name: waitlistForm.name,
         quantity: parseInt(waitlistForm.quantity) || 1,
       });
-      setMyWaitlist(data);
+      if (data && data.id) {
+        setMyWaitlist(data);
+      } else {
+        // Réponse inattendue du serveur : on revérifie l'état réel plutôt que de laisser l'écran figé
+        await loadMyWaitlist(waitlistDate);
+      }
       triggerNotificationsRefresh(); // l'inscription génère une notif
     } catch (err: any) {
-      setWaitlistError(err.message?.includes('ALREADY_LISTED') ? 'Vous êtes déjà inscrit pour ce jour.' : err.message);
+      setWaitlistError(err.message?.includes('ALREADY_LISTED') ? 'Vous êtes déjà inscrit pour ce jour.' : err.message || "Erreur lors de l'inscription");
     } finally { setWaitlistSubmitting(false); }
   };
 
   // Quitter la liste
   const handleWaitlistLeave = async () => {
     if (!myWaitlist || !confirm('Quitter la liste d\'attente ?')) return;
-    await api.del(`/appointments/waitlist/${myWaitlist.id}`);
-    setMyWaitlist(null);
+    setWaitlistError('');
+    try {
+      await api.del(`/appointments/waitlist/${myWaitlist.id}`);
+      setMyWaitlist(null);
+      setJustLeft(true);
+      setTimeout(() => setJustLeft(false), 3000);
+    } catch (err: any) {
+      // On ne vide pas l'état localement si la suppression a échoué côté serveur —
+      // on revérifie plutôt la vraie position pour ne jamais désynchroniser l'affichage.
+      setWaitlistError(err.message || "Erreur lors de la sortie de la liste. Réessayez.");
+      await loadMyWaitlist(waitlistDate);
+    }
   };
 
   const formatDate = (dt: string) => new Date(dt).toLocaleDateString('fr-FR', {
@@ -457,12 +485,24 @@ export default function AppointmentsPage() {
                 Choisir un jour
               </label>
               <input type="date" min={tomorrowStr} value={waitlistDate}
-                onChange={e => { setWaitlistDate(e.target.value); setWaitlistError(''); setMyWaitlist(null); }}
+                onChange={e => { setWaitlistDate(e.target.value); setWaitlistError(''); setMyWaitlist(null); setJustLeft(false); }}
                 className="input-field w-full sm:w-64" />
             </div>
 
             {waitlistDate && (
               <>
+                {justLeft && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-green-50 text-green-600 text-sm rounded-xl border border-green-100">
+                    <CheckCircle size={15} className="flex-shrink-0" />
+                    Vous avez quitté la liste d'attente. Vous pouvez vous réinscrire à tout moment.
+                  </div>
+                )}
+                {waitlistError && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">
+                    <AlertCircle size={14} className="flex-shrink-0" />
+                    {waitlistError}
+                  </div>
+                )}
                 {waitlistLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <div className="w-5 h-5 border-2 border-orange-200 border-t-orange-500 rounded-full animate-spin" />
@@ -530,13 +570,6 @@ export default function AppointmentsPage() {
                     </div>
 
                     <div className="p-5">
-                      {waitlistError && (
-                        <div className="flex items-center gap-2 mb-4 px-3 py-2.5 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">
-                          <AlertCircle size={14} className="flex-shrink-0" />
-                          {waitlistError}
-                        </div>
-                      )}
-
                       <form onSubmit={handleWaitlistSubmit} className="space-y-4">
                         <div>
                           <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">

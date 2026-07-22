@@ -42,7 +42,7 @@ export default function TicketsPage() {
 
   // Recherche
   const [searchForm, setSearchForm] = useState({
-    origin: '', destination: '', date: '', passengers: 1, cabinClass: 'economy',
+    name: '', origin: '', destination: '', date: '', passengers: 1, cabinClass: 'economy',
   });
   const [results, setResults] = useState<FlightOffer[]>([]);
   const [searching, setSearching] = useState(false);
@@ -77,6 +77,7 @@ export default function TicketsPage() {
     setSaving(flight.id);
     try {
       await api.post('/tickets', {
+        passengerName: searchForm.name,
         flightNumber:  flight.flightNumber,
         airline:       flight.airline,
         origin:        flight.origin,
@@ -247,6 +248,13 @@ export default function TicketsPage() {
               <h3 className="text-sm font-medium text-gray-800">Recherche de vols</h3>
               <p className="text-xs text-gray-400">Codes IATA aéroport ou ville (ex : CDG, JFK, NYC)</p>
               <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="text-xs text-gray-500 block mb-1">Nom du passager</label>
+                  <input type="text" placeholder="ex : Jean Dupont"
+                    value={searchForm.name}
+                    onChange={e => setSearchForm({ ...searchForm, name: e.target.value })}
+                    className="input-field" required />
+                </div>
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">Origine</label>
                   <input type="text" placeholder="ex : CDG"
