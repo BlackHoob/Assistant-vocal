@@ -1,20 +1,28 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { ADMIN_JWT_SECRET } from '../routes/adminAuth';
+import { UnauthorizedError } from '../errors/AppError';
+import { AdminRole } from '../types';
 
-export interface AdminRequest extends Request {
-  admin?: { id: number; username: string; email: string; role: string };
+export interface AdminPayload {
+  id: number;
+  username: string;
+  email: string;
+  role: AdminRole;
 }
 
-export const adminGuard = (req: AdminRequest, res: Response, next: NextFunction) => {
+export interface AdminRequest extends Request {
+  admin?: AdminPayload;
+}
+
+export function adminGuard(req: AdminRequest, _res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ message: 'Accès administrateur requis' });
+  if (!token) return next(new UnauthorizedError('Accès administrateur requis'));
 
   try {
-    const decoded: any = jwt.verify(token, ADMIN_JWT_SECRET);
-    req.admin = decoded;
+    req.admin = jwt.verify(token, ADMIN_JWT_SECRET) as AdminPayload;
     next();
   } catch {
-    return res.status(401).json({ message: 'Token admin invalide ou expiré' });
+    next(new UnauthorizedError('Token admin invalide ou expiré'));
   }
-};
+}

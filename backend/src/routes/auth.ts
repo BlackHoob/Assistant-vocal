@@ -3,147 +3,144 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { pool } from '../config/db';
-import { sendPasswordResetEmail } from '../routes/mailer';
+import { sendPasswordResetEmail } from './mailer';
+import { authGuard, AuthRequest } from '../middleware/authGuard';
+import { asyncHandler } from '../utils/asyncHandler';
+import { ValidationError, UnauthorizedError, ConflictError, NotFoundError } from '../errors/AppError';
+import { User, SafeUser } from '../types';
 
 export const authRouter = Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'nestor_jwt_secret_change_this';
+export const JWT_SECRET = process.env.JWT_SECRET || 'nestor_jwt_secret_change_this';
 const JWT_EXPIRES = '7d';
-
-const signToken = (user: any) =>
-  jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
-
-const safeUser = (u: any) => ({
-  id: u.id, name: u.name, email: u.email, avatar: u.avatar, phone: u.phone
-});
-
-// POST /api/auth/register
-authRouter.post('/register', async (req: Request, res: Response) => {
-  try {
-    const { name, email, password } = req.body;
-    if (!name || !email || !password)
-      return res.status(400).json({ message: 'Tous les champs sont requis' });
-    if (password.length < 8)
-      return res.status(400).json({ message: 'Mot de passe min. 8 caractères' });
-
-    const [existing]: any = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing.length)
-      return res.status(409).json({ message: 'Cet email est déjà utilisé' });
-
-    const hash = await bcrypt.hash(password, 12);
-    const [result]: any = await pool.query(
-      'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-      [name, email, hash]
-    );
-    const [rows]: any = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
-    res.status(201).json({ token: signToken(rows[0]), user: safeUser(rows[0]) });
-  } catch (err: any) { res.status(500).json({ message: err.message }); }
-});
-
-// POST /api/auth/login
-authRouter.post('/login', async (req: Request, res: Response) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ message: 'Email et mot de passe requis' });
-
-    const [rows]: any = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
-    const user = rows[0];
-    if (!user) return res.status(401).json({ message: 'Identifiants invalides' });
-    if (!user.password_hash)
-      return res.status(401).json({ message: 'Ce compte utilise une autre méthode de connexion' });
-
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ message: 'Identifiants invalides' });
-
-    res.json({ token: signToken(user), user: safeUser(user) });
-  } catch (err: any) { res.status(500).json({ message: err.message }); }
-});
-
-// GET /api/auth/me
-authRouter.get('/me', async (req: Request, res: Response) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ message: 'Token manquant' });
-    const decoded: any = jwt.verify(token, JWT_SECRET);
-    const [rows]: any = await pool.query(
-      'SELECT id, name, email, avatar, phone FROM users WHERE id = ?', [decoded.id]
-    );
-    if (!rows.length) return res.status(404).json({ message: 'Utilisateur introuvable' });
-    res.json(rows[0]);
-  } catch { res.status(401).json({ message: 'Token invalide' }); }
-});
-
-export { JWT_SECRET };
-
-// PUT /api/auth/change-password
-import { authGuard, AuthRequest } from '../middleware/authGuard';
-authRouter.put('/change-password', authGuard, async (req: AuthRequest, res: Response) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    if (!newPassword || newPassword.length < 8)
-      return res.status(400).json({ message: 'Nouveau mot de passe min. 8 caractères' });
-    const [rows]: any = await pool.query('SELECT * FROM users WHERE id = ?', [req.user!.id]);
-    const user = rows[0];
-    const valid = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!valid) return res.status(401).json({ message: 'Mot de passe actuel incorrect' });
-    const hash = await bcrypt.hash(newPassword, 12);
-    await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user!.id]);
-    res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ message: err.message }); }
-});
-
+const MIN_PASSWORD_LENGTH = 8;
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-// POST /api/auth/forgot-password
-authRouter.post('/forgot-password', async (req: Request, res: Response) => {
+function signToken(user: Pick<User, 'id' | 'email' | 'name'>): string {
+  return jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+}
+
+function toSafeUser(user: User): SafeUser {
+  return { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone };
+}
+
+async function findUserByEmail(email: string): Promise<User | null> {
+  const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]) as [User[], unknown];
+  return rows[0] ?? null;
+}
+
+async function findUserById(id: number): Promise<User | null> {
+  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]) as [User[], unknown];
+  return rows[0] ?? null;
+}
+
+// POST /api/auth/register
+authRouter.post('/register', asyncHandler(async (req: Request, res: Response) => {
+  const { name, email, password } = req.body as { name?: string; email?: string; password?: string };
+  if (!name || !email || !password) throw new ValidationError('Tous les champs sont requis');
+  if (password.length < MIN_PASSWORD_LENGTH) throw new ValidationError(`Mot de passe min. ${MIN_PASSWORD_LENGTH} caractères`);
+
+  if (await findUserByEmail(email)) throw new ConflictError('Cet email est déjà utilisé');
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const [result] = await pool.query(
+    'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
+    [name, email, passwordHash]
+  ) as [{ insertId: number }, unknown];
+
+  const user = await findUserById(result.insertId);
+  res.status(201).json({ token: signToken(user!), user: toSafeUser(user!) });
+}));
+
+// POST /api/auth/login
+authRouter.post('/login', asyncHandler(async (req: Request, res: Response) => {
+  const { email, password } = req.body as { email?: string; password?: string };
+  if (!email || !password) throw new ValidationError('Email et mot de passe requis');
+
+  const user = await findUserByEmail(email);
+  if (!user) throw new UnauthorizedError('Identifiants invalides');
+  if (!user.password_hash) throw new UnauthorizedError('Ce compte utilise une autre méthode de connexion');
+  // NOTE : ce contrôle n'existait pas avant le refactor — le blocage admin
+  // (AdminUsersPage → "Bloquer") mettait bien `blocked = 1` en base, mais
+  // rien ne l'empêchait de se reconnecter. Ajouté ici pour que la fonctionnalité
+  // fasse réellement ce qu'elle promet.
+  if (user.blocked) throw new UnauthorizedError('Ce compte a été bloqué par l\'agence');
+
+  const passwordValid = await bcrypt.compare(password, user.password_hash);
+  if (!passwordValid) throw new UnauthorizedError('Identifiants invalides');
+
+  res.json({ token: signToken(user), user: toSafeUser(user) });
+}));
+
+// GET /api/auth/me
+authRouter.get('/me', asyncHandler(async (req: Request, res: Response) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) throw new UnauthorizedError('Token manquant');
+
+  let decoded: { id: number };
   try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ message: 'Email requis' });
+    decoded = jwt.verify(token, JWT_SECRET) as { id: number };
+  } catch {
+    throw new UnauthorizedError('Token invalide');
+  }
 
-    const [rows]: any = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+  const user = await findUserById(decoded.id);
+  if (!user) throw new NotFoundError('Utilisateur introuvable');
+  res.json(toSafeUser(user));
+}));
 
-    // Réponse identique que le compte existe ou non, pour ne pas permettre
-    // à quelqu'un de deviner quels emails sont inscrits (énumération de comptes).
-    if (!rows.length) return res.json({ success: true });
+// PUT /api/auth/change-password
+authRouter.put('/change-password', authGuard, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { currentPassword, newPassword } = req.body as { currentPassword: string; newPassword: string };
+  if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new ValidationError(`Nouveau mot de passe min. ${MIN_PASSWORD_LENGTH} caractères`);
+  }
 
-    const userId = rows[0].id;
-    const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + 60 * 60 * 1000); // 1h
+  const user = await findUserById(req.user!.id);
+  const passwordValid = await bcrypt.compare(currentPassword, user!.password_hash!);
+  if (!passwordValid) throw new UnauthorizedError('Mot de passe actuel incorrect');
 
-    await pool.query(
-      'UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?',
-      [token, expires, userId]
-    );
+  const hash = await bcrypt.hash(newPassword, 12);
+  await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user!.id]);
+  res.json({ success: true });
+}));
 
-    const resetUrl = `${FRONTEND_URL}/reset-password?token=${token}`;
-    await sendPasswordResetEmail(email, resetUrl);
+// POST /api/auth/forgot-password
+authRouter.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body as { email?: string };
+  if (!email) throw new ValidationError('Email requis');
 
-    res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ message: err.message }); }
-});
+  const user = await findUserByEmail(email);
+  // Réponse identique que le compte existe ou non (anti-énumération de comptes).
+  if (!user) return res.json({ success: true });
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+  await pool.query(
+    'UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?',
+    [token, expires, user.id]
+  );
+
+  await sendPasswordResetEmail(email, `${FRONTEND_URL}/reset-password?token=${token}`);
+  res.json({ success: true });
+}));
 
 // POST /api/auth/reset-password
-authRouter.post('/reset-password', async (req: Request, res: Response) => {
-  try {
-    const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ message: 'Token et mot de passe requis' });
-    if (password.length < 8) return res.status(400).json({ message: 'Minimum 8 caractères' });
+authRouter.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
+  const { token, password } = req.body as { token?: string; password?: string };
+  if (!token || !password) throw new ValidationError('Token et mot de passe requis');
+  if (password.length < MIN_PASSWORD_LENGTH) throw new ValidationError(`Minimum ${MIN_PASSWORD_LENGTH} caractères`);
 
-    const [rows]: any = await pool.query(
-      'SELECT id FROM users WHERE reset_token = ? AND reset_token_expires > NOW()',
-      [token]
-    );
-    if (!rows.length) return res.status(400).json({ message: 'Lien invalide ou expiré' });
+  const [rows] = await pool.query(
+    'SELECT id FROM users WHERE reset_token = ? AND reset_token_expires > NOW()', [token]
+  ) as [{ id: number }[], unknown];
+  if (!rows.length) throw new ValidationError('Lien invalide ou expiré');
 
-    const userId = rows[0].id;
-    const hash = await bcrypt.hash(password, 12);
-
-    await pool.query(
-      'UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?',
-      [hash, userId]
-    );
-
-    res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ message: err.message }); }
-});
+  const hash = await bcrypt.hash(password, 12);
+  await pool.query(
+    'UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?',
+    [hash, rows[0].id]
+  );
+  res.json({ success: true });
+}));

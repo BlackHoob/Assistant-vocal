@@ -14,6 +14,7 @@ import { notificationsRouter } from './routes/notifications';
 import { adminAuthRouter } from './routes/adminAuth';
 import { adminRouter } from './routes/admin';
 import './config/db';
+import { errorHandler } from './middleware/errorHandler';
 
 dotenv.config();
 
@@ -35,6 +36,7 @@ app.use('/api/profile', profileRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/admin/auth', adminAuthRouter);
 app.use('/api/admin', adminRouter);
+app.use(errorHandler)
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => console.log(`🚀 Nestor Vocal API — http://localhost:${PORT}`));

@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAdminApi } from '../../hooks/useAdminApi';
 import { useAuth } from '../../hooks/useAuth';
 import { FileText, Upload, Search, User, CheckCircle, Trash2, Paperclip, Inbox, Send, X, Download } from 'lucide-react';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+import { API_URL, assetUrl } from '../../lib/api';
+import { formatFileSize, formatDate } from '../../utils/format';
 
 const DOC_TYPES = [
   { value: 'passport',    label: 'Passeport' },
@@ -20,13 +20,6 @@ function parseDocName(name: string) {
   const match = name?.match(/^\[(\w+)\]\s*(.*)$/);
   if (match) return { typeKey: match[1], fileName: match[2] };
   return { typeKey: name, fileName: '' };
-}
-
-function formatSize(bytes?: number) {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} o`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
 export default function AdminDocumentsPage() {
@@ -78,7 +71,7 @@ export default function AdminDocumentsPage() {
       fd.append('userId', selectedUser.id);
       fd.append('type', type);
       if (expiresAt) fd.append('expiresAt', expiresAt);
-      const res = await fetch(`${API}/admin/documents/send`, {
+      const res = await fetch(`${API_URL}/admin/documents/send`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${adminToken}` },
         body: fd,
@@ -107,8 +100,7 @@ export default function AdminDocumentsPage() {
 
   const typeLabel = (t: string) => DOC_TYPES.find(d => d.value === t)?.label || t;
 
-  const fileUrl = (doc: any) =>
-    doc.file_path?.startsWith('http') ? doc.file_path : `${API.replace('/api', '')}${doc.file_path}`;
+  const fileUrl = (doc: any) => assetUrl(doc.file_path || '');
 
   const renderDocRow = (d: any) => {
     const { typeKey, fileName } = parseDocName(d.name);
@@ -125,9 +117,9 @@ export default function AdminDocumentsPage() {
             </p>
             <p className="text-xs text-gray-400">
               {d.userName || `Utilisateur #${d.userId}`}
-              {d.created_at && ` · ${new Date(d.created_at).toLocaleDateString('fr-FR')}`}
-              {d.file_size ? ` · ${formatSize(d.file_size)}` : ''}
-              {d.expires_at && ` · expire le ${new Date(d.expires_at).toLocaleDateString('fr-FR')}`}
+              {d.created_at && ` · ${formatDate(d.created_at, { day: 'numeric', month: 'short', year: 'numeric' })}`}
+              {d.file_size ? ` · ${formatFileSize(d.file_size)}` : ''}
+              {d.expires_at && ` · expire le ${formatDate(d.expires_at, { day: 'numeric', month: 'short', year: 'numeric' })}`}
             </p>
           </div>
         </div>
@@ -291,8 +283,8 @@ export default function AdminDocumentsPage() {
                   </p>
                   <p className="text-xs text-gray-400">
                     {previewDoc.userName || `Utilisateur #${previewDoc.userId}`}
-                    {previewDoc.created_at && ` · ${new Date(previewDoc.created_at).toLocaleDateString('fr-FR')}`}
-                    {previewDoc.file_size ? ` · ${formatSize(previewDoc.file_size)}` : ''}
+                    {previewDoc.created_at && ` · ${formatDate(previewDoc.created_at, { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                    {previewDoc.file_size ? ` · ${formatFileSize(previewDoc.file_size)}` : ''}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">

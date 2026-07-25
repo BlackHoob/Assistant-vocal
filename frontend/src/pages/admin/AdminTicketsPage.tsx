@@ -1,10 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useAdminApi } from '../../hooks/useAdminApi';
 import { Ticket, Trash2, ArrowRight } from 'lucide-react';
+import StatusBadge from '../../components/shared/StatusBadge';
+import { formatDate } from '../../utils/format';
+import { Ticket as TicketType } from '../../types';
+
+interface TicketsResponse { tickets: TicketType[]; total: number }
 
 export default function AdminTicketsPage() {
   const api = useAdminApi();
-  const [data, setData] = useState<any>({ tickets: [], total: 0 });
+  const [data, setData] = useState<TicketsResponse>({ tickets: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
 
@@ -21,16 +26,6 @@ export default function AdminTicketsPage() {
     if (!confirm('Supprimer ce billet ?')) return;
     await api.del(`/admin/tickets/${id}`);
     load();
-  };
-
-  const badge = (s: string) => {
-    const map: any = {
-      upcoming: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-      completed: 'bg-green-500/10 text-green-400 border-green-500/20',
-      cancelled: 'bg-red-500/10 text-red-400 border-red-500/20',
-    };
-    const labels: any = { upcoming: 'À venir', completed: 'Terminé', cancelled: 'Annulé' };
-    return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs border ${map[s] || map.upcoming}`}>{labels[s]}</span>;
   };
 
   return (
@@ -63,7 +58,7 @@ export default function AdminTicketsPage() {
           <tbody>
             {loading ? (
               <tr><td colSpan={7} className="text-center py-10 text-gray-600">Chargement...</td></tr>
-            ) : data.tickets.map((t: any) => (
+            ) : data.tickets.map((t: TicketType) => (
               <tr key={t.id} className="border-b border-gray-100 hover:bg-orange-50/30 transition-colors">
                 <td className="px-5 py-3 text-sm font-mono text-gray-600">{t.flightNumber || '—'}</td>
                 <td className="px-5 py-3">
@@ -72,13 +67,11 @@ export default function AdminTicketsPage() {
                   </span>
                 </td>
                 <td className="px-5 py-3 text-sm text-gray-500">{t.userName || '—'}</td>
-                <td className="px-5 py-3 text-sm text-gray-500">
-                  {t.departureDate ? new Date(t.departureDate).toLocaleDateString('fr-FR') : '—'}
-                </td>
+                <td className="px-5 py-3 text-sm text-gray-500">{formatDate(t.departureDate)}</td>
                 <td className="px-5 py-3 text-sm text-orange-400 font-medium">
                   {t.price ? `${t.price} ${t.currency}` : '—'}
                 </td>
-                <td className="px-5 py-3">{badge(t.status)}</td>
+                <td className="px-5 py-3"><StatusBadge status={t.status} /></td>
                 <td className="px-5 py-3">
                   <button onClick={() => handleDelete(t.id)}
                     className="p-1.5 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all">

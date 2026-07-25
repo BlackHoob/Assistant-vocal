@@ -1,0 +1,99 @@
+services:
+  mysql:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      # Identifiants dédiés au conteneur Docker — volontairement différents
+      # de ton compte MySQL local (root). Pas besoin qu'ils correspondent.
+      MYSQL_ROOT_PASSWORD: docker_root_pw
+      MYSQL_DATABASE: nestor_vocal
+      MYSQL_USER: nestor
+      MYSQL_PASSWORD: nestor
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      # Doit correspondre exactement aux identifiants du service mysql ci-dessus.
+      DB_HOST: mysql
+      DB_USER: nestor
+      DB_PASS: nestor
+      DB_NAME: nestor_vocal
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
+      DUFFEL_API_KEY: ${DUFFEL_API_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      FRONTEND_URL: http://localhost:5173
+      BACKEND_URL: http://localhost:4000
+    ports:
+      - "4000:4000"
+    volumes:
+      - backend_uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:4000/api
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+  # SonarQube démarre avec le reste (`docker compose up`).
+  # SONAR_ES_BOOTSTRAP_CHECKS_DISABLE évite un souci fréquent sur Windows/WSL2
+  # (vm.max_map_count trop bas) — acceptable pour un usage local/démo,
+  # à ne pas faire en production.
+  sonarqube:
+    image: sonarqube:lts-community
+    restart: unless-stopped
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+
+  # Ne démarre PAS avec `docker compose up` (profil "tools") — se lance à la
+  # demande, une fois qu'on veut analyser le code. Voir instructions plus bas.
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli:10
+    profiles: ["tools"]
+    depends_on:
+      - sonarqube
+    volumes:
+      - .:/usr/src
+    working_dir: /usr/src
+    environment:
+      SONAR_HOST_URL: http://sonarqube:9000
+      SONAR_TOKEN: ${SONAR_TOKEN}
+
+volumes:
+  mysql_data:
+  backend_uploads:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:

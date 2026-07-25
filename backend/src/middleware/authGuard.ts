@@ -1,19 +1,26 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET } from '../routes/auth';
+import { UnauthorizedError } from '../errors/AppError';
 
-export interface AuthRequest extends Request {
-  user?: { id: number; email: string; name: string };
+export interface UserPayload {
+  id: number;
+  email: string;
+  name: string;
 }
 
-export const authGuard = (req: AuthRequest, res: Response, next: NextFunction) => {
+export interface AuthRequest extends Request {
+  user?: UserPayload;
+}
+
+export function authGuard(req: AuthRequest, _res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ message: 'Token manquant' });
+  if (!token) return next(new UnauthorizedError('Token manquant'));
+
   try {
-    const decoded: any = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
+    req.user = jwt.verify(token, JWT_SECRET) as UserPayload;
     next();
   } catch {
-    return res.status(401).json({ message: 'Token invalide ou expiré' });
+    next(new UnauthorizedError('Token invalide ou expiré'));
   }
-};
+}

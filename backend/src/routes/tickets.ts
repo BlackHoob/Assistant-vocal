@@ -2,15 +2,17 @@ import { Router, Response } from 'express';
 import { authGuard, AuthRequest } from '../middleware/authGuard';
 import { pool } from '../config/db';
 import axios from 'axios';
-import dotenv from 'dotenv';
 import { createNotification } from './notifications';
-dotenv.config();
+import { asyncHandler } from '../utils/asyncHandler';
+import { AppError, ValidationError } from '../errors/AppError';
+import { Ticket, FlightOffer } from '../types';
 
 export const ticketsRouter = Router();
 ticketsRouter.use(authGuard);
 
 const DUFFEL_API_KEY = process.env.DUFFEL_API_KEY || '';
 const DUFFEL_URL = 'https://api.duffel.com';
+const MAX_OFFERS_RETURNED = 20;
 
 const duffelHeaders = {
   Authorization: `Bearer ${DUFFEL_API_KEY}`,
@@ -19,8 +21,34 @@ const duffelHeaders = {
   Accept: 'application/json',
 };
 
+// Sous-ensemble typé de la réponse Duffel réellement utilisé ici (l'API en
+// renvoie beaucoup plus, mais on ne type que ce qu'on lit).
+interface DuffelSegment {
+  origin?: { iata_code?: string };
+  destination?: { iata_code?: string };
+  departing_at?: string;
+  arriving_at?: string;
+  marketing_carrier?: { iata_code?: string };
+  marketing_carrier_flight_number?: string;
+}
+interface DuffelSlice {
+  duration?: string;
+  origin?: { iata_code?: string };
+  destination?: { iata_code?: string };
+  segments?: DuffelSegment[];
+}
+interface DuffelOffer {
+  id: string;
+  owner?: { name?: string; logo_symbol_url?: string };
+  slices?: DuffelSlice[];
+  cabin_class?: string;
+  total_amount?: string;
+  total_currency?: string;
+  expires_at?: string;
+}
+
 // Convertit une durée ISO 8601 (ex: "PT7H45M") en format lisible (ex: "7h45")
-function formatIsoDuration(iso?: string): string {
+export function formatIsoDuration(iso?: string): string {
   if (!iso) return '';
   const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
   if (!match) return '';
@@ -30,7 +58,7 @@ function formatIsoDuration(iso?: string): string {
 }
 
 // Normalise une offre Duffel vers le format utilisé par le frontend
-function mapDuffelOffer(offer: any) {
+export function mapDuffelOffer(offer: DuffelOffer): FlightOffer {
   const slice = offer.slices?.[0] || {};
   const segments = slice.segments || [];
   const firstSeg = segments[0] || {};
@@ -67,64 +95,60 @@ export async function searchFlights(
   departureDate: string,
   passengers: number = 1,
   cabinClass: string = 'economy'
-) {
+): Promise<FlightOffer[]> {
   if (!origin || !destination || !departureDate) {
-    const e: any = new Error('Origine, destination et date requises (ex : CDG, JFK, 2026-08-15)');
-    e.code = 'MISSING_FIELDS';
-    throw e;
+    throw new ValidationError('Origine, destination et date requises (ex : CDG, JFK, 2026-08-15)');
   }
 
   const passengerList = Array.from({ length: Math.max(passengers, 1) }, () => ({ type: 'adult' }));
 
-  const response = await axios.post(
-    `${DUFFEL_URL}/air/offer_requests?return_offers=true`,
-    {
-      data: {
-        slices: [
-          {
-            origin: origin.toUpperCase(),
-            destination: destination.toUpperCase(),
-            departure_date: departureDate,
-          },
-        ],
-        passengers: passengerList,
-        cabin_class: cabinClass,
+  let response;
+  try {
+    response = await axios.post(
+      `${DUFFEL_URL}/air/offer_requests?return_offers=true`,
+      {
+        data: {
+          slices: [{ origin: origin.toUpperCase(), destination: destination.toUpperCase(), departure_date: departureDate }],
+          passengers: passengerList,
+          cabin_class: cabinClass,
+        },
       },
-    },
-    { headers: duffelHeaders }
-  );
+      { headers: duffelHeaders }
+    );
+  } catch (err: any) {
+    const duffelMessage = err.response?.data?.errors?.[0]?.message || err.message;
+    throw new AppError(`Erreur recherche vols : ${duffelMessage}`, 502, 'DUFFEL_ERROR');
+  }
 
-  const offers = response.data?.data?.offers || [];
+  const offers: DuffelOffer[] = response.data?.data?.offers || [];
   return offers
     .map(mapDuffelOffer)
-    .sort((a: any, b: any) => a.price - b.price)
-    .slice(0, 20);
+    .sort((a, b) => a.price - b.price)
+    .slice(0, MAX_OFFERS_RETURNED);
 }
 
-export async function getUserTickets(userId: number) {
-  const [rows]: any = await pool.query(
-    'SELECT * FROM tickets WHERE userId = ? ORDER BY departureDate DESC',
-    [userId]
-  );
+export async function getUserTickets(userId: number): Promise<Ticket[]> {
+  const [rows] = await pool.query(
+    'SELECT * FROM tickets WHERE userId = ? ORDER BY departureDate DESC', [userId]
+  ) as [Ticket[], unknown];
   return rows;
 }
 
 export async function saveTicket(userId: number, data: {
   flightNumber?: string; airline?: string; origin: string; destination: string;
   departureDate?: string; arrivalDate?: string; price?: number; currency?: string;
-}) {
+}): Promise<Ticket> {
   const { flightNumber, airline, origin, destination, departureDate, arrivalDate, price, currency } = data;
-  if (!origin || !destination) {
-    const e: any = new Error('Origine et destination requis'); e.code = 'MISSING_FIELDS'; throw e;
-  }
+  if (!origin || !destination) throw new ValidationError('Origine et destination requis');
 
-  const [result]: any = await pool.query(
+  const [result] = await pool.query(
     `INSERT INTO tickets (userId, flightNumber, airline, origin, destination, departureDate, arrivalDate, price, currency)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [userId, flightNumber || '', airline || '', origin, destination,
-     departureDate || '', arrivalDate || '', price ? parseFloat(price as any) : 0, currency || 'EUR']
-  );
-  const [rows]: any = await pool.query('SELECT * FROM tickets WHERE id = ?', [result.insertId]);
+     departureDate || '', arrivalDate || '', price ? Number(price) : 0, currency || 'EUR']
+  ) as [{ insertId: number }, unknown];
+
+  const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [result.insertId]) as [Ticket[], unknown];
   const ticket = rows[0];
 
   const flightLabel = flightNumber ? `${flightNumber} ` : '';
@@ -133,7 +157,7 @@ export async function saveTicket(userId: number, data: {
   return ticket;
 }
 
-export async function deleteTicket(userId: number, id: string) {
+export async function deleteTicket(userId: number, id: string): Promise<void> {
   await pool.query('DELETE FROM tickets WHERE id = ? AND userId = ?', [id, userId]);
 }
 
@@ -141,47 +165,27 @@ export async function deleteTicket(userId: number, id: string) {
 // Routes HTTP — appellent uniquement les fonctions ci-dessus
 // ─────────────────────────────────────────────────────────────────────────
 
-// GET /api/tickets
-ticketsRouter.get('/', async (req: AuthRequest, res: Response) => {
-  try { res.json(await getUserTickets(req.user!.id)); }
-  catch (err: any) { res.status(500).json({ message: err.message }); }
-});
+ticketsRouter.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
+  res.json(await getUserTickets(req.user!.id));
+}));
 
-// POST /api/tickets/search — recherche par origine / destination / date
-ticketsRouter.post('/search', async (req: AuthRequest, res: Response) => {
-  try {
-    const { origin, destination, date, passengers, cabinClass } = req.body;
-    res.json(await searchFlights(origin, destination, date, passengers, cabinClass));
-  } catch (err: any) {
-    if (err.code === 'MISSING_FIELDS') return res.status(400).json({ message: err.message });
-    const msg = err.response?.data?.errors?.[0]?.message || err.message;
-    res.status(500).json({ message: `Erreur recherche vols : ${msg}` });
-  }
-});
+ticketsRouter.post('/search', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { origin, destination, date, passengers, cabinClass } = req.body;
+  res.json(await searchFlights(origin, destination, date, passengers, cabinClass));
+}));
 
-// POST /api/tickets — sauvegarder un billet
-ticketsRouter.post('/', async (req: AuthRequest, res: Response) => {
-  try {
-    const ticket = await saveTicket(req.user!.id, req.body);
-    res.status(201).json(ticket);
-  } catch (err: any) {
-    if (err.code === 'MISSING_FIELDS') return res.status(400).json({ message: err.message });
-    res.status(500).json({ message: err.message });
-  }
-});
+ticketsRouter.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const ticket = await saveTicket(req.user!.id, req.body);
+  res.status(201).json(ticket);
+}));
 
-// PATCH /api/tickets/:id/status
-ticketsRouter.patch('/:id/status', async (req: AuthRequest, res: Response) => {
-  try {
-    const { status } = req.body;
-    await pool.query('UPDATE tickets SET status = ? WHERE id = ? AND userId = ?',
-      [status, req.params.id, req.user!.id]);
-    res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ message: err.message }); }
-});
+ticketsRouter.patch('/:id/status', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { status } = req.body;
+  await pool.query('UPDATE tickets SET status = ? WHERE id = ? AND userId = ?', [status, req.params.id, req.user!.id]);
+  res.json({ success: true });
+}));
 
-// DELETE /api/tickets/:id
-ticketsRouter.delete('/:id', async (req: AuthRequest, res: Response) => {
-  try { await deleteTicket(req.user!.id, req.params.id); res.json({ success: true }); }
-  catch (err: any) { res.status(500).json({ message: err.message }); }
-});
+ticketsRouter.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
+  await deleteTicket(req.user!.id, req.params.id);
+  res.json({ success: true });
+}));
