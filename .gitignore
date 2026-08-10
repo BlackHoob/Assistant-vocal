@@ -7,3 +7,4 @@ coverage/
 .DS_Store
 .env.local
 .env.*
+nestor_vocal_dump.sql

@@ -27,7 +27,7 @@ interface WaitlistEntry {
   total: number;
 }
 
-const AGENTS = ['Mme Koné', 'M. Traoré', 'Mme Diabaté', 'M. Coulibaly', 'Tout agent disponible'];
+const AGENTS = ['M. Kouakou Nesto', 'Mme. Karime O', 'M. Malek S'];
 const TYPE_OPTIONS = ['Prendre un billet', 'Consultation', 'Suivi', 'Urgence'];
 
 export default function AppointmentsPage() {

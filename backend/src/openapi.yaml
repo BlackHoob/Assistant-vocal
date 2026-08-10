@@ -1,0 +1,892 @@
+openapi: 3.0.3
+info:
+  title: Nestor Vocal API
+  description: >
+    API REST du concierge vocal intelligent Nestor Vocal — Selectour Alltour.
+    Deux systèmes d'authentification JWT distincts : un pour les utilisateurs
+    (clients de l'agence), un pour les administrateurs.
+  version: "1.0.0"
+servers:
+  - url: http://localhost:4000
+    description: Serveur local de développement
+
+tags:
+  - name: Auth
+    description: Authentification utilisateur (JWT client)
+  - name: Auth Google
+    description: OAuth Google
+  - name: Admin Auth
+    description: Authentification administrateur (JWT admin séparé)
+  - name: Appointments
+    description: Rendez-vous et liste d'attente
+  - name: Tickets
+    description: Recherche et gestion des billets d'avion (Duffel)
+  - name: Documents
+    description: Gestion documentaire utilisateur
+  - name: Notifications
+    description: Notifications utilisateur
+  - name: Profile
+    description: Profil utilisateur
+  - name: Voice
+    description: Assistant vocal IA (STT, chat, function calling)
+  - name: Admin
+    description: Back-office administrateur (dashboard, gestion utilisateurs/RDV/billets)
+
+components:
+  securitySchemes:
+    UserAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT utilisateur, obtenu via /api/auth/login ou /api/auth/register
+    AdminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT administrateur, obtenu via /api/admin/auth/login (secret séparé du JWT utilisateur)
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+        avatar: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+
+    Appointment:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        dateTime: { type: string, format: date-time }
+        agent: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        location: { type: string }
+        status: { type: string, enum: [upcoming, completed, cancelled] }
+
+    WaitlistEntry:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        name: { type: string }
+        date: { type: string, format: date }
+        quantity: { type: integer }
+        rank: { type: integer }
+        total: { type: integer }
+
+    Ticket:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        flightNumber: { type: string }
+        airline: { type: string }
+        origin: { type: string }
+        destination: { type: string }
+        departureDate: { type: string, format: date-time }
+        arrivalDate: { type: string, format: date-time }
+        price: { type: number, format: decimal, minimum: 0 }
+        currency: { type: string, default: EUR }
+        status: { type: string, enum: [upcoming, completed, cancelled] }
+
+    FlightOffer:
+      type: object
+      description: Offre de vol normalisée à partir de la réponse Duffel
+      properties:
+        id: { type: string }
+        airline: { type: string }
+        airlineLogo: { type: string }
+        flightNumber: { type: string }
+        origin: { type: string }
+        destination: { type: string }
+        departureDate: { type: string, format: date-time }
+        arrivalDate: { type: string, format: date-time }
+        duration: { type: string, example: "7h45" }
+        stops: { type: integer }
+        cabinClass: { type: string }
+        price: { type: number }
+        currency: { type: string }
+        expiresAt: { type: string, format: date-time }
+
+    DocumentRow:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        name: { type: string }
+        file_path: { type: string }
+        file_size: { type: integer }
+        mime_type: { type: string }
+        expires_at: { type: string, format: date, nullable: true }
+        sent_by_admin: { type: boolean }
+
+    NotificationRow:
+      type: object
+      properties:
+        id: { type: integer }
+        userId: { type: integer }
+        type: { type: string, enum: [info, success, warning, error] }
+        category: { type: string, enum: [appointment, ticket, document, system] }
+        message: { type: string }
+        is_read: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+security:
+  - UserAuth: []
+
+paths:
+  # ─────────────────────────── AUTH ───────────────────────────
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Créer un compte utilisateur
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 8 }
+      responses:
+        '201':
+          description: Compte créé, token JWT retourné
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+        '400': { description: Champs manquants ou mot de passe trop court }
+        '409': { description: Email déjà utilisé }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Connexion utilisateur
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Connexion réussie
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+        '401': { description: Identifiants invalides, ou compte bloqué par l'agence }
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Récupérer le profil de l'utilisateur connecté (via token)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { description: Token manquant ou invalide }
+        '404': { description: Utilisateur introuvable }
+
+  /api/auth/change-password:
+    put:
+      tags: [Auth]
+      summary: Changer son mot de passe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Mot de passe changé }
+        '401': { description: Mot de passe actuel incorrect }
+
+  /api/auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Demander un lien de réinitialisation de mot de passe
+      description: >
+        Réponse identique que le compte existe ou non, pour éviter
+        l'énumération de comptes existants.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: "Toujours { success: true }" }
+
+  /api/auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Réinitialiser le mot de passe via token reçu par email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Mot de passe réinitialisé }
+        '400': { description: Lien invalide ou expiré (validité 1h) }
+
+  # ─────────────────────────── AUTH GOOGLE ───────────────────────────
+  /api/auth/google:
+    get:
+      tags: [Auth Google]
+      summary: Démarre le flux OAuth Google
+      security: []
+      responses:
+        '302': { description: Redirection vers Google }
+
+  /api/auth/google/callback:
+    get:
+      tags: [Auth Google]
+      summary: Callback OAuth Google — crée ou rattache le compte, redirige avec le JWT
+      security: []
+      responses:
+        '302': { description: Redirection vers le frontend avec token en query params }
+
+  # ─────────────────────────── ADMIN AUTH ───────────────────────────
+  /api/admin/auth/login:
+    post:
+      tags: [Admin Auth]
+      summary: Connexion administrateur (JWT admin, secret distinct du JWT utilisateur)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, description: "username ou email" }
+                password: { type: string }
+      responses:
+        '200': { description: Connexion réussie, token admin retourné }
+        '401': { description: Identifiants invalides }
+
+  /api/admin/auth/change-password:
+    post:
+      tags: [Admin Auth]
+      summary: Changer le mot de passe administrateur
+      security: [{ AdminAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Mot de passe changé }
+
+  # ─────────────────────────── APPOINTMENTS ───────────────────────────
+  /api/appointments:
+    get:
+      tags: [Appointments]
+      summary: Liste des rendez-vous de l'utilisateur connecté
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Appointment' } } } }
+    post:
+      tags: [Appointments]
+      summary: Créer un rendez-vous
+      description: Vérifie la disponibilité du créneau avant création (assertSlotAvailable).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, dateTime]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                dateTime: { type: string, format: date-time }
+                quantity: { type: integer, minimum: 1 }
+                agent: { type: string }
+      responses:
+        '201': { description: Créé, content: { application/json: { schema: { $ref: '#/components/schemas/Appointment' } } } }
+        '409': { description: Créneau déjà réservé (SLOT_TAKEN) }
+
+  /api/appointments/taken:
+    get:
+      tags: [Appointments]
+      summary: Créneaux déjà pris pour une date donnée
+      parameters:
+        - { name: date, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200': { description: "Liste des horaires occupés (HH:MM)" }
+
+  /api/appointments/{id}:
+    put:
+      tags: [Appointments]
+      summary: Modifier un rendez-vous
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content: { application/json: { schema: { $ref: '#/components/schemas/Appointment' } } }
+      responses:
+        '200': { description: Rendez-vous mis à jour }
+    delete:
+      tags: [Appointments]
+      summary: Supprimer un rendez-vous
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  /api/appointments/waitlist:
+    get:
+      tags: [Appointments]
+      summary: Liste d'attente pour une date donnée
+      parameters: [{ name: date, in: query, required: true, schema: { type: string, format: date } }]
+      responses:
+        '200': { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/WaitlistEntry' } } } } }
+    post:
+      tags: [Appointments]
+      summary: S'inscrire en liste d'attente
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, name]
+              properties:
+                date: { type: string, format: date }
+                name: { type: string }
+                quantity: { type: integer }
+      responses:
+        '201': { description: Inscrit, content: { application/json: { schema: { $ref: '#/components/schemas/WaitlistEntry' } } } }
+        '409': { description: "Déjà inscrit ce jour (ALREADY_LISTED)" }
+
+  /api/appointments/waitlist/me:
+    get:
+      tags: [Appointments]
+      summary: Ma position dans la liste d'attente pour une date
+      parameters: [{ name: date, in: query, required: true, schema: { type: string, format: date } }]
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/WaitlistEntry' } } } }
+
+  /api/appointments/waitlist/{id}:
+    delete:
+      tags: [Appointments]
+      summary: Se désinscrire de la liste d'attente
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Désinscrit }
+
+  # ─────────────────────────── TICKETS ───────────────────────────
+  /api/tickets:
+    get:
+      tags: [Tickets]
+      summary: Billets enregistrés de l'utilisateur
+      responses:
+        '200': { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Ticket' } } } } }
+    post:
+      tags: [Tickets]
+      summary: Enregistrer un billet choisi
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [origin, destination]
+              properties:
+                flightNumber: { type: string }
+                airline: { type: string }
+                origin: { type: string }
+                destination: { type: string }
+                departureDate: { type: string }
+                arrivalDate: { type: string }
+                price: { type: number }
+                currency: { type: string }
+      responses:
+        '201': { content: { application/json: { schema: { $ref: '#/components/schemas/Ticket' } } } }
+
+  /api/tickets/search:
+    post:
+      tags: [Tickets]
+      summary: Rechercher des vols via l'API Duffel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [origin, destination, date]
+              properties:
+                origin: { type: string, example: CDG }
+                destination: { type: string, example: JFK }
+                date: { type: string, format: date }
+                passengers: { type: integer, default: 1 }
+                cabinClass: { type: string, default: economy }
+      responses:
+        '200': { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/FlightOffer' } } } } }
+        '502': { description: "Erreur de l'API Duffel (DUFFEL_ERROR)" }
+
+  /api/tickets/{id}/status:
+    patch:
+      tags: [Tickets]
+      summary: Changer le statut d'un billet
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { status: { type: string } } } } }
+      responses:
+        '200': { description: Statut mis à jour }
+
+  /api/tickets/{id}:
+    delete:
+      tags: [Tickets]
+      summary: Supprimer un billet
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  # ─────────────────────────── DOCUMENTS ───────────────────────────
+  /api/documents:
+    get:
+      tags: [Documents]
+      summary: Documents de l'utilisateur connecté
+      responses:
+        '200': { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/DocumentRow' } } } } }
+
+  /api/documents/upload:
+    post:
+      tags: [Documents]
+      summary: Uploader un document (multipart, max 20 Mo)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string }
+                expires_at: { type: string, format: date }
+      responses:
+        '201': { content: { application/json: { schema: { $ref: '#/components/schemas/DocumentRow' } } } }
+
+  /api/documents/{id}:
+    delete:
+      tags: [Documents]
+      summary: Supprimer un document
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé (fichier + ligne BDD) }
+
+  # ─────────────────────────── NOTIFICATIONS ───────────────────────────
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: Liste des notifications (recalcule les notifications système à chaque appel)
+      responses:
+        '200': { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/NotificationRow' } } } } }
+    delete:
+      tags: [Notifications]
+      summary: Supprimer toutes les notifications
+      responses:
+        '200': { description: Supprimées }
+
+  /api/notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Nombre de notifications non lues (badge)
+      responses:
+        '200': { content: { application/json: { schema: { type: object, properties: { count: { type: integer } } } } } }
+
+  /api/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Marquer toutes les notifications comme lues
+      responses:
+        '200': { description: OK }
+
+  /api/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Marquer une notification comme lue
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK }
+
+  /api/notifications/{id}:
+    delete:
+      tags: [Notifications]
+      summary: Supprimer une notification
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimée }
+
+  # ─────────────────────────── PROFILE ───────────────────────────
+  /api/profile:
+    get:
+      tags: [Profile]
+      summary: Récupérer son profil
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+    put:
+      tags: [Profile]
+      summary: Modifier son profil (nom, téléphone)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string }, phone: { type: string } } }
+      responses:
+        '200': { content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+
+  /api/profile/avatar:
+    post:
+      tags: [Profile]
+      summary: Uploader un avatar (multipart, max 5 Mo)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: { type: object, properties: { avatar: { type: string, format: binary } } }
+      responses:
+        '200': { description: "Avatar mis à jour (supprime l'ancien fichier)" }
+    delete:
+      tags: [Profile]
+      summary: Supprimer son avatar
+      responses:
+        '200': { description: Avatar supprimé }
+
+  # ─────────────────────────── VOICE ───────────────────────────
+  /api/voice/stt:
+    post:
+      tags: [Voice]
+      summary: Transcription vocale (speech-to-text via ElevenLabs Scribe)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [audioBase64]
+              properties:
+                audioBase64: { type: string, description: "Audio encodé base64 (webm)" }
+      responses:
+        '200':
+          description: >
+            Texte transcrit (chaîne vide en cas d'échec côté ElevenLabs —
+            dégradation silencieuse volontaire plutôt qu'erreur bloquante)
+          content: { application/json: { schema: { type: object, properties: { text: { type: string } } } } }
+
+  /api/voice/chat:
+    post:
+      tags: [Voice]
+      summary: Conversation avec l'assistant Nestor (Groq LLaMA 3.3, function calling)
+      description: >
+        Boucle de function calling (max 4 tours) donnant accès à des outils réels
+        (rendez-vous, liste d'attente, recherche/réservation de vols). Le modèle
+        ne peut pas inventer de résultat : chaque action passe par un outil réel.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages: { type: array, items: { type: object } }
+                lang: { type: string, default: fr }
+      responses:
+        '200': { content: { application/json: { schema: { type: object, properties: { reply: { type: string } } } } } }
+
+  # ─────────────────────────── ADMIN ───────────────────────────
+  /api/admin/stats:
+    get:
+      tags: [Admin]
+      summary: Statistiques du dashboard (agrégations MySQL calculées à la volée)
+      security: [{ AdminAuth: [] }]
+      description: >
+        Totaux, réservations par mois (6 derniers mois, fusion RDV + billets),
+        nouveaux utilisateurs par mois, top destinations, volumétrie et taux
+        de conversion de l'assistant IA.
+      responses:
+        '200': { description: OK }
+
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      summary: Liste paginée des utilisateurs, avec recherche
+      security: [{ AdminAuth: [] }]
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/users/{id}:
+    get:
+      tags: [Admin]
+      summary: Détail d'un utilisateur (RDV, billets, documents)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK }
+    put:
+      tags: [Admin]
+      summary: Modifier un utilisateur
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Mis à jour }
+        '409': { description: Email déjà utilisé }
+    delete:
+      tags: [Admin]
+      summary: Supprimer un utilisateur
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  /api/admin/users/{id}/block:
+    put:
+      tags: [Admin]
+      summary: Bloquer / débloquer un utilisateur (empêche la connexion)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { blocked: { type: boolean } } } } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/appointments:
+    get:
+      tags: [Admin]
+      summary: Liste des rendez-vous (tous utilisateurs, filtrable)
+      security: [{ AdminAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/appointments/{id}:
+    put:
+      tags: [Admin]
+      summary: Modifier un rendez-vous (admin)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Mis à jour }
+    delete:
+      tags: [Admin]
+      summary: Supprimer un rendez-vous (admin)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  /api/admin/appointments/{id}/block:
+    put:
+      tags: [Admin]
+      summary: "Annuler un rendez-vous (raccourci : passe le statut à cancelled)"
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK }
+
+  /api/admin/waitlist:
+    get:
+      tags: [Admin]
+      summary: Liste d'attente (vue admin, filtrable par date ou plage)
+      security: [{ AdminAuth: [] }]
+      parameters:
+        - { name: date, in: query, schema: { type: string, format: date } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/waitlist/{id}:
+    delete:
+      tags: [Admin]
+      summary: Retirer une entrée de la liste d'attente
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  /api/admin/tickets:
+    get:
+      tags: [Admin]
+      summary: Liste des billets (tous utilisateurs, filtrable par statut)
+      security: [{ AdminAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/tickets/{id}:
+    delete:
+      tags: [Admin]
+      summary: Supprimer un billet (admin)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  /api/admin/conversations:
+    get:
+      tags: [Admin]
+      summary: Conversations avec l'assistant IA (supervision, lecture seule)
+      security: [{ AdminAuth: [] }]
+      parameters:
+        - { name: userId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/notifications/send:
+    post:
+      tags: [Admin]
+      summary: Envoyer une notification (ciblée à un utilisateur, ou broadcast à tous)
+      security: [{ AdminAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target, message]
+              properties:
+                target: { type: string, enum: [user, all] }
+                userId: { type: integer }
+                type: { type: string }
+                category: { type: string }
+                message: { type: string }
+      responses:
+        '200': { description: "{ success, sent: nombre de destinataires }" }
+
+  /api/admin/notifications:
+    get:
+      tags: [Admin]
+      summary: Historique des notifications envoyées (toutes)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: limit, in: query, schema: { type: integer, default: 50 } }]
+      responses:
+        '200': { description: OK }
+
+  /api/admin/documents/send:
+    post:
+      tags: [Admin]
+      summary: Envoyer un document à un utilisateur (multipart, même convention que l'upload client)
+      security: [{ AdminAuth: [] }]
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                userId: { type: integer }
+                type: { type: string }
+                expiresAt: { type: string, format: date }
+                file: { type: string, format: binary }
+      responses:
+        '201': { content: { application/json: { schema: { $ref: '#/components/schemas/DocumentRow' } } } }
+
+  /api/admin/documents:
+    get:
+      tags: [Admin]
+      summary: Liste des documents (tous utilisateurs, filtrable par userId)
+      security: [{ AdminAuth: [] }]
+      parameters:
+        - { name: userId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: OK }
+
+  /api/admin/documents/{id}:
+    delete:
+      tags: [Admin]
+      summary: Supprimer un document (admin)
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+
+  /api/admin/admins:
+    get:
+      tags: [Admin]
+      summary: Liste des comptes administrateurs (réservé superadmin)
+      security: [{ AdminAuth: [] }]
+      responses:
+        '200': { description: OK }
+        '403': { description: "Réservé aux superadmins (ForbiddenError)" }
+    post:
+      tags: [Admin]
+      summary: Créer un compte administrateur (réservé superadmin)
+      security: [{ AdminAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username: { type: string }
+                email: { type: string }
+                password: { type: string }
+                role: { type: string, enum: [admin, superadmin] }
+      responses:
+        '201': { description: Créé }
+        '403': { description: Réservé aux superadmins }
+        '409': { description: Username ou email déjà utilisé }
+
+  /api/admin/admins/{id}:
+    delete:
+      tags: [Admin]
+      summary: "Supprimer un compte administrateur (réservé superadmin, ne peut pas se supprimer soi-même)"
+      security: [{ AdminAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Supprimé }
+        '400': { description: "Impossible de supprimer son propre compte" }
+        '403': { description: Réservé aux superadmins }

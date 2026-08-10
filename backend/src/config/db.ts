@@ -22,10 +22,10 @@ export const pool = mysql.createPool({
 if (process.env.NODE_ENV !== 'test') {
   pool.getConnection()
     .then(conn => {
-      console.log('✅ MySQL connecté');
+      console.log('MySQL connecté');
       conn.release();
     })
     .catch(err => {
-      console.error('❌ Erreur MySQL:', err.message);
+      console.error('Erreur MySQL:', err.message);
     });
 }

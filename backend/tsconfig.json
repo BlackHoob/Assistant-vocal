@@ -8,8 +8,9 @@
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node", "jest"]
+    "types": ["node", "jest"],
+    "isolatedModules": true
   },
-  "include": ["src"],
+  "include": ["src", "jest.config.js"],
   "exclude": ["node_modules", "dist"]
 }

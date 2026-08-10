@@ -4,14 +4,7 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 // chaque route : capture toute erreur (synchrone ou rejetée dans une
 // Promise) et la transmet au middleware d'erreur global (errorHandler)
 // via next(), au lieu de dupliquer la gestion d'erreur partout.
-//
-// Avant :
-//   router.get('/x', async (req, res) => {
-//     try { ... } catch (err: any) { res.status(500).json({ message: err.message }); }
-//   });
-//
-// Après :
-//   router.get('/x', asyncHandler(async (req, res) => { ... }));
+
 export const asyncHandler = <Req extends Request = Request>(
   handler: (req: Req, res: Response, next: NextFunction) => Promise<unknown>
 ): RequestHandler => (req, res, next) => {

@@ -33,8 +33,7 @@ export async function getTakenSlots(date: string): Promise<string[]> {
   });
 }
 
-// Utilisée par createAppointment ET updateAppointment — avant le refactor,
-// la même requête de vérification était copiée-collée dans les deux.
+
 async function assertSlotAvailable(dateTime: string, excludeId?: string): Promise<void> {
   let query = `SELECT id FROM appointments WHERE dateTime = ? AND status = 'upcoming'`;
   const params: string[] = [dateTime];

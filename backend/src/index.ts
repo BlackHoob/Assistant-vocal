@@ -15,10 +15,13 @@ import { adminAuthRouter } from './routes/adminAuth';
 import { adminRouter } from './routes/admin';
 import './config/db';
 import { errorHandler } from './middleware/errorHandler';
+import { setupSwagger } from './swagger';
 
 dotenv.config();
 
+
 const app = express();
+setupSwagger(app);
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'], credentials: true }));
@@ -39,4 +42,4 @@ app.use('/api/admin', adminRouter);
 app.use(errorHandler)
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
-app.listen(PORT, () => console.log(`🚀 Nestor Vocal API — http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Nestor Vocal API http://localhost:${PORT}`));
