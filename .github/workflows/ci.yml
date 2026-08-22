@@ -12,39 +12,45 @@ permissions:
 
 jobs:
   backend-tests:
-    name: Backend - tests et build
-    runs-on: ubuntu-latest
+  name: Backend - tests et build
+  runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: backend
+  defaults:
+    run:
+      working-directory: backend
 
-    steps:
-      - name: Recuperer le projet
-        uses: actions/checkout@v4
+  steps:
+    - name: Recuperer le projet
+      uses: actions/checkout@v4
 
-      - name: Installer Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+    - name: Installer Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: backend/package-lock.json
 
-      - name: Installer les dependances
-        run: npm ci
+    - name: Installer les dependances
+      run: npm ci
 
-      - name: Executer les tests backend
-        run: npx jest --ci --coverage --runInBand
+    - name: Executer les tests backend
+      env:
+        NODE_ENV: test
+        GOOGLE_CLIENT_ID: test-client-id.apps.googleusercontent.com
+        GOOGLE_CLIENT_SECRET: test-client-secret
+        BACKEND_URL: http://localhost:4000
+        FRONTEND_URL: http://localhost:5173
+      run: npx jest --ci --coverage --runInBand
 
-      - name: Compiler le backend
-        run: npm run build
+    - name: Compiler le backend
+      run: npm run build
 
-      - name: Sauvegarder la couverture backend
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-coverage
-          path: backend/coverage/
-          retention-days: 7
+    - name: Sauvegarder la couverture backend
+      uses: actions/upload-artifact@v4
+      with:
+        name: backend-coverage
+        path: backend/coverage/
+        retention-days: 7
 
   frontend-tests:
     name: Frontend - tests et build
