@@ -1,6 +1,8 @@
 import { useTranslation } from 'react-i18next';
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { useModalA11y } from '../hooks/useModalA11y';
+import AccessibleIconButton from '../components/common/AccessibleIconButton';
 import {
   FileText, Upload, Trash2, AlertTriangle, CheckCircle,
   Clock, FileType, CreditCard, Globe, Shield, Syringe,
@@ -64,6 +66,7 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
+  const modalRef = useModalA11y(!!previewDoc, () => setPreviewDoc(null));
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const headers = { Authorization: `Bearer ${token}` };
@@ -391,7 +394,13 @@ export default function DocumentsPage() {
       {previewDoc && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPreviewDoc(null)} />
-          <div className="relative z-10 bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+          <div
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Aperçu du document ${previewDoc.name}`}
+            className="relative z-10 bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl"
+          >
             {/* En-tête */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
               <div className="min-w-0">
@@ -408,9 +417,12 @@ export default function DocumentsPage() {
                 >
                   <Download size={13} /> Télécharger
                 </button>
-                <button onClick={() => setPreviewDoc(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg transition-colors">
-                  <X size={18} />
-                </button>
+                <AccessibleIconButton
+                  icon={<X size={18} />}
+                  label="Fermer l'aperçu"
+                  onClick={() => setPreviewDoc(null)}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg transition-colors"
+                />
               </div>
             </div>
 

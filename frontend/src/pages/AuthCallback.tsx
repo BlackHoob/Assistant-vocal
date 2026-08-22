@@ -1,26 +1,36 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { useApi } from '../hooks/useApi';
 
 export default function AuthCallback() {
   const { setAuth } = useAuth();
+  const api = useApi();
   const navigate = useNavigate();
+  const hasRun = useRef(false);
 
   useEffect(() => {
+    if (hasRun.current) return;
+    hasRun.current = true;
+
     const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
-    const name  = params.get('name')  || '';
-    const email = params.get('email') || '';
-    const id    = parseInt(params.get('id') || '0');
+    const code = params.get('code');
     const error = params.get('error');
 
-    if (error || !token) {
+    if (error || !code) {
       navigate('/login?error=google');
       return;
     }
 
-    setAuth(token, { id, name, email });
-    navigate('/');
+    (async () => {
+      try {
+        const data = await api.post('/auth/google/exchange', { code });
+        setAuth(data.token, data.user);
+        navigate('/');
+      } catch {
+        navigate('/login?error=google');
+      }
+    })();
   }, []);
 
   return (

@@ -11,6 +11,7 @@ import {
 import { pool } from '../config/db';
 import { createNotification } from '../routes/notifications';
 
+
 /* -------------------------------------------------------------------------- */
 /*                                   MOCKS                                    */
 /* -------------------------------------------------------------------------- */
@@ -68,6 +69,7 @@ jest.mock('../utils/fileUpload', () => ({
       };
     }),
   })),
+  deleteUploadedFile: jest.fn(),
 }));
 
 /* -------------------------------------------------------------------------- */
@@ -105,6 +107,8 @@ app.use(
     });
   },
 );
+
+
 
 /* -------------------------------------------------------------------------- */
 /*                                  TESTS                                     */
@@ -1192,6 +1196,15 @@ describe('Admin routes', () => {
     });
 
     it('doit supprimer un document', async () => {
+      // 1er appel : findByIdAdmin (SELECT) — doit renvoyer un document
+      // existant avec file_path, sinon la route répond 404 avant d'aller
+      // plus loin.
+      mockedPool.query.mockResolvedValueOnce([
+        [{ id: 1, userId: 10, file_path: '/uploads/documents/test-document.pdf' }],
+        [],
+      ] as never);
+
+      // 2e appel : deleteById (DELETE)
       mockedPool.query.mockResolvedValueOnce([
         {},
         [],
@@ -1395,4 +1408,3 @@ describe('Admin routes', () => {
     });
   });
 });
-

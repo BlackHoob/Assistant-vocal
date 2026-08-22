@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useAdminApi } from '../../hooks/useAdminApi';
 import { useAuth } from '../../hooks/useAuth';
+import { useModalA11y } from '../../hooks/useModalA11y';
+import AccessibleIconButton from '../../components/common/AccessibleIconButton';
 import { FileText, Upload, Search, User, CheckCircle, Trash2, Paperclip, Inbox, Send, X, Download } from 'lucide-react';
 import { API_URL, assetUrl } from '../../lib/api';
 import { formatFileSize, formatDate } from '../../utils/format';
@@ -29,6 +31,7 @@ export default function AdminDocumentsPage() {
   const [history, setHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [previewDoc, setPreviewDoc] = useState<any>(null);
+  const modalRef = useModalA11y(!!previewDoc, () => setPreviewDoc(null));
 
   const [userSearch, setUserSearch] = useState('');
   const [userResults, setUserResults] = useState<any[]>([]);
@@ -274,7 +277,13 @@ export default function AdminDocumentsPage() {
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPreviewDoc(null)} />
-            <div className="relative z-10 bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+            <div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Aperçu du document ${typeLabel(typeKey)}`}
+              className="relative z-10 bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl"
+            >
               {/* En-tête */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
                 <div className="min-w-0">
@@ -296,9 +305,12 @@ export default function AdminDocumentsPage() {
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-red-400 border border-red-100 hover:bg-red-50 transition-all">
                     <Trash2 size={13} /> Supprimer
                   </button>
-                  <button onClick={() => setPreviewDoc(null)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg transition-colors">
-                    <X size={18} />
-                  </button>
+                  <AccessibleIconButton
+                    icon={<X size={18} />}
+                    label="Fermer l'aperçu"
+                    onClick={() => setPreviewDoc(null)}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg transition-colors"
+                  />
                 </div>
               </div>
 

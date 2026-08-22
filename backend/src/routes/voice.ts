@@ -1,6 +1,5 @@
 import { Router, Response } from 'express';
 import { authGuard, AuthRequest } from '../middleware/authGuard';
-import { pool } from '../config/db';
 import Groq from 'groq-sdk';
 import axios from 'axios';
 import FormData from 'form-data';
@@ -9,11 +8,14 @@ import { ValidationError } from '../errors/AppError';
 import { SYSTEM_PROMPTS } from './voice/prompts';
 import { voiceTools } from './voice/tools';
 import { executeVoiceTool } from './voice/toolExecutor';
+import { MySqlChatMessageRepository } from '../repository/chatMessageRepository';
 
 export const voiceRouter = Router();
 voiceRouter.use(authGuard);
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const chatMessageRepository = new MySqlChatMessageRepository();
+
+const GROQ_MODEL = 'openai/gpt-oss-120b';
 const MAX_TOOL_ROUNDS = 4;
 const MAX_CONVERSATION_HISTORY = 20;
 const FALLBACK_REPLY = "Désolé, je n'ai pas pu terminer cette action. Pouvez-vous reformuler ?";
@@ -87,8 +89,8 @@ voiceRouter.post('/stt', asyncHandler(async (req: AuthRequest, res: Response) =>
     });
     res.json({ text: response.data.text || '' });
   } catch (err: any) {
-    // Dégradation silencieuse volontaire : un texte vide est plus facile à
-    // gérer côté client qu'une erreur bloquante pour une simple panne STT.
+    
+  
     console.error('STT error:', err.response?.data || err.message);
     res.json({ text: '' });
   }
@@ -106,10 +108,8 @@ voiceRouter.post('/chat', asyncHandler(async (req: AuthRequest, res: Response) =
 
   const reply = (await runConversationWithTools(conversation, req.user!.id)) || FALLBACK_REPLY;
 
-  await pool.query(
-    'INSERT INTO chat_messages (userId, role, content) VALUES (?, ?, ?)',
-    [req.user!.id, 'assistant', reply]
-  ).catch(() => {});
+  await chatMessageRepository.create(req.user!.id, 'assistant', reply).catch(() => {});
 
   res.json({ reply });
 }));
+

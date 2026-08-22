@@ -40,7 +40,7 @@ export const useVoice = () => {
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
-  // ── STT : démarre ET attend le résultat en une seule promesse ──
+  //  STT : démarre ET attend le résultat en une seule promesse 
   const startRecording = useCallback(() => {
     return new Promise<string>((resolve, reject) => {
       if (!SR) {
@@ -78,7 +78,7 @@ export const useVoice = () => {
         if (resolved) return;
         resolved = true;
         const msg =
-          e.error === 'not-allowed'  ? 'Micro refusé — autorisez le micro dans Chrome (🔒 → Microphone → Autoriser).' :
+          e.error === 'not-allowed'  ? 'Micro refusé — autorisez le micro dans Chrome (bloquer → Microphone → Autoriser).' :
           e.error === 'no-speech'    ? 'Aucune parole détectée. Réessayez.' :
           e.error === 'network'      ? 'Erreur réseau micro.' :
           `Erreur micro : ${e.error}`;
@@ -114,7 +114,7 @@ export const useVoice = () => {
     });
   }, []);
 
-  // ── CHAT ────────────────────────────────────────────────
+  //  CHAT 
   const sendMessage = useCallback(async (messages: any[], lang?: string): Promise<string> => {
     setIsLoading(true);
     try {
@@ -128,7 +128,7 @@ export const useVoice = () => {
     } finally { setIsLoading(false); }
   }, [token]);
 
-  // ── TTS ─────────────────────────────────────────────────
+  //  TTS 
   const speak = useCallback((text: string, msgId?: number): Promise<void> => {
     return new Promise((resolve) => {
       window.speechSynthesis.cancel();

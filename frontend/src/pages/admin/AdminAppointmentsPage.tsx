@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAdminApi } from '../../hooks/useAdminApi';
+import { useModalA11y } from '../../hooks/useModalA11y';
+import AccessibleIconButton from '../../components/common/AccessibleIconButton';
 import { Calendar, Trash2, Pencil, Ban, X, Save } from 'lucide-react';
 
 export default function AdminAppointmentsPage() {
@@ -9,6 +11,7 @@ export default function AdminAppointmentsPage() {
   const [status, setStatus] = useState('');
 
   const [editing, setEditing] = useState<any>(null);
+  const modalRef = useModalA11y(!!editing, () => setEditing(null));
   const [form, setForm] = useState({ title: '', description: '', dateTime: '', location: '', status: 'upcoming' });
   const [saving, setSaving] = useState(false);
 
@@ -134,10 +137,21 @@ export default function AdminAppointmentsPage() {
       {editing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditing(null)} />
-          <div className="relative z-10 bg-white rounded-2xl p-6 w-full max-w-md">
+          <div
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Modifier le rendez-vous"
+            className="relative z-10 bg-white rounded-2xl p-6 w-full max-w-md"
+          >
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-gray-900">Modifier le rendez-vous</h3>
-              <button onClick={() => setEditing(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              <AccessibleIconButton
+                icon={<X size={18} />}
+                label="Fermer la fenêtre de modification"
+                onClick={() => setEditing(null)}
+                className="text-gray-400 hover:text-gray-600"
+              />
             </div>
             <form onSubmit={handleSaveEdit} className="space-y-3">
               <div>

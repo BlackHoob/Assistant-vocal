@@ -1,30 +1,41 @@
 import { Router, Response } from 'express';
+import path from 'path';
 import { adminGuard, AdminRequest } from '../middleware/adminGuard';
-import { pool } from '../config/db';
 import bcrypt from 'bcryptjs';
 import { createNotification } from './notifications';
 import { asyncHandler } from '../utils/asyncHandler';
-import { createUploadMiddleware } from '../utils/fileUpload';
-import { ValidationError, ForbiddenError, ConflictError } from '../errors/AppError';
+import { createUploadMiddleware, deleteUploadedFile } from '../utils/fileUpload';
+import { ValidationError, ForbiddenError, ConflictError, NotFoundError } from '../errors/AppError';
 import {
-  User, Appointment, Ticket, DocumentRow, NotificationRow,
-  ChatMessage, DashboardStats, WaitlistEntry,
-  NotificationType, NotificationCategory, Admin, AdminRole, DocumentType,
+  DashboardStats, NotificationType, NotificationCategory, AdminRole, DocumentType,
 } from '../types';
+import { MySqlUserRepository } from '../repository/userRepository';
+import { MySqlAppointmentRepository } from '../repository/appointmentRepository';
+import { MySqlTicketRepository } from '../repository/ticketRepository';
+import { MySqlDocumentRepository } from '../repository/documentRepository';
+import { MySqlWaitlistRepository } from '../repository/waitlistRepository';
+import { MySqlChatMessageRepository } from '../repository/chatMessageRepository';
+import { MySqlStatsRepository } from '../repository/statsRepository';
+import { MySqlAdminRepository } from '../repository/adminRepository';
+import { MySqlNotificationRepository } from '../repository/notificationRepository';
 
 // Même dossier et même limite de taille (20 Mo) que documents.ts, pour que
 // les documents envoyés par l'admin et ceux envoyés par les clients suivent
-// exactement la même convention. Avant : un multer() séparé ici, sans
-// limite de taille — un admin (ou un token admin compromis) pouvait
-// uploader un fichier de taille arbitraire et saturer le disque du serveur.
-const upload = createUploadMiddleware(
-  'documents',
-  originalName => `${Date.now()}-${originalName}`,
-  20
-);
+// exactement la même convention.
+const upload = createUploadMiddleware('documents', originalName => `${Date.now()}-${originalName}`, 20);
 
 export const adminRouter = Router();
 adminRouter.use(adminGuard);
+
+const userRepository = new MySqlUserRepository();
+const appointmentRepository = new MySqlAppointmentRepository();
+const ticketRepository = new MySqlTicketRepository();
+const documentRepository = new MySqlDocumentRepository();
+const waitlistRepository = new MySqlWaitlistRepository();
+const chatMessageRepository = new MySqlChatMessageRepository();
+const statsRepository = new MySqlStatsRepository();
+const adminRepository = new MySqlAdminRepository();
+const notificationRepository = new MySqlNotificationRepository();
 
 // Les routes /admins/* (gestion des comptes admin) sont réservées aux
 // superadmins — ce contrôle était répété identiquement dans 3 routes.
@@ -55,48 +66,30 @@ export function mergeMonthlySeries(
 // ─────────────────────────────────────────────────────────────────────────
 
 adminRouter.get('/stats', asyncHandler(async (_req: AdminRequest, res: Response<DashboardStats>) => {
-  const [[{ totalUsers }]] = await pool.query('SELECT COUNT(*) as totalUsers FROM users') as [{ totalUsers: number }[], unknown];
-  const [[{ totalAppointments }]] = await pool.query('SELECT COUNT(*) as totalAppointments FROM appointments') as [{ totalAppointments: number }[], unknown];
-  const [[{ totalTickets }]] = await pool.query('SELECT COUNT(*) as totalTickets FROM tickets') as [{ totalTickets: number }[], unknown];
-  const [[{ totalDocuments }]] = await pool.query('SELECT COUNT(*) as totalDocuments FROM documents') as [{ totalDocuments: number }[], unknown];
-  const [[{ upcomingAppointments }]] = await pool.query("SELECT COUNT(*) as upcomingAppointments FROM appointments WHERE status='upcoming'") as [{ upcomingAppointments: number }[], unknown];
-  const [[{ upcomingTickets }]] = await pool.query("SELECT COUNT(*) as upcomingTickets FROM tickets WHERE status='upcoming'") as [{ upcomingTickets: number }[], unknown];
-  const [recentActivity] = await pool.query(`
-    SELECT DATE(created_at) as date, COUNT(*) as count, 'appointment' as type FROM appointments
-    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) GROUP BY DATE(created_at)
-    UNION ALL
-    SELECT DATE(created_at), COUNT(*), 'ticket' FROM tickets
-    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) GROUP BY DATE(created_at)
-    ORDER BY date DESC
-  `) as [DashboardStats['recentActivity'], unknown];
+  const [
+    totalUsers, totalAppointments, totalTickets, totalDocuments,
+    upcomingAppointments, upcomingTickets, recentActivity,
+    apptByMonth, ticketsByMonth, newUsersByMonth, topDestinations,
+    totalIAMessages, totalIAUsers, iaConversationsToday, usersWithTicket,
+  ] = await Promise.all([
+    statsRepository.countUsers(),
+    statsRepository.countAppointments(),
+    statsRepository.countTickets(),
+    statsRepository.countDocuments(),
+    statsRepository.countUpcomingAppointments(),
+    statsRepository.countUpcomingTickets(),
+    statsRepository.getRecentActivity(),
+    statsRepository.getAppointmentsByMonth(),
+    statsRepository.getTicketsByMonth(),
+    statsRepository.getNewUsersByMonth(),
+    statsRepository.getTopDestinations(),
+    chatMessageRepository.countTotal(),
+    chatMessageRepository.countDistinctUsers(),
+    chatMessageRepository.countAssistantToday(),
+    statsRepository.countUsersWithTicket(),
+  ]);
 
-  // ── Graphiques : réservations par mois (RDV + billets), 6 derniers mois ──
-  const [apptByMonth] = await pool.query(`
-    SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count FROM appointments
-    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH) GROUP BY month ORDER BY month`) as [MonthlyCount[], unknown];
-  const [ticketsByMonth] = await pool.query(`
-    SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count FROM tickets
-    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH) GROUP BY month ORDER BY month`) as [MonthlyCount[], unknown];
   const bookingsByMonth = mergeMonthlySeries(apptByMonth, ticketsByMonth, 'appointments', 'tickets');
-
-  // ── Nouveaux utilisateurs par mois, 6 derniers mois ──
-  const [newUsersByMonth] = await pool.query(`
-    SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count FROM users
-    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH) GROUP BY month ORDER BY month`) as [MonthlyCount[], unknown];
-
-  // ── Destinations les plus réservées ──
-  const [topDestinations] = await pool.query(`
-    SELECT destination, COUNT(*) as count FROM tickets
-    WHERE destination IS NOT NULL AND destination != ''
-    GROUP BY destination ORDER BY count DESC LIMIT 5`) as [DashboardStats['topDestinations'], unknown];
-
-  // ── Assistant IA : volume de conversations + taux de conversion ──
-  const [[{ totalIAMessages }]] = await pool.query('SELECT COUNT(*) as totalIAMessages FROM chat_messages') as [{ totalIAMessages: number }[], unknown];
-  const [[{ totalIAUsers }]] = await pool.query('SELECT COUNT(DISTINCT userId) as totalIAUsers FROM chat_messages') as [{ totalIAUsers: number }[], unknown];
-  const [[{ iaConversationsToday }]] = await pool.query(
-    "SELECT COUNT(*) as iaConversationsToday FROM chat_messages WHERE role='assistant' AND DATE(created_at) = CURDATE()"
-  ) as [{ iaConversationsToday: number }[], unknown];
-  const [[{ usersWithTicket }]] = await pool.query('SELECT COUNT(DISTINCT userId) as usersWithTicket FROM tickets') as [{ usersWithTicket: number }[], unknown];
   const conversionRate = totalIAUsers > 0 ? Math.round((usersWithTicket / totalIAUsers) * 1000) / 10 : 0;
 
   res.json({
@@ -111,77 +104,60 @@ adminRouter.get('/stats', asyncHandler(async (_req: AdminRequest, res: Response<
 // Utilisateurs
 // ─────────────────────────────────────────────────────────────────────────
 
-interface UserWithCounts extends User { appointmentCount: number; ticketCount: number }
-
 adminRouter.get('/users', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { search = '', page = '1', limit = '20' } = req.query as Record<string, string>;
   const offset = (parseInt(page) - 1) * parseInt(limit);
-  const like = `%${search}%`;
 
-  const [users] = await pool.query(
-    `SELECT u.*, COUNT(DISTINCT a.id) as appointmentCount, COUNT(DISTINCT t.id) as ticketCount
-     FROM users u LEFT JOIN appointments a ON a.userId = u.id LEFT JOIN tickets t ON t.userId = u.id
-     WHERE u.name LIKE ? OR u.email LIKE ?
-     GROUP BY u.id ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
-    [like, like, parseInt(limit), offset]
-  ) as [UserWithCounts[], unknown];
-  const [[{ total }]] = await pool.query(
-    'SELECT COUNT(*) as total FROM users WHERE name LIKE ? OR email LIKE ?', [like, like]
-  ) as [{ total: number }[], unknown];
+  const [users, total] = await Promise.all([
+    userRepository.findAdminList(search, parseInt(limit), offset),
+    userRepository.countBySearch(search),
+  ]);
 
   res.json({ users, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
 }));
 
 adminRouter.get('/users/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  const [user] = await pool.query(
-    'SELECT id, name, email, avatar, phone, blocked, created_at FROM users WHERE id = ?', [req.params.id]
-  ) as [User[], unknown];
-  const [appointments] = await pool.query(
-    'SELECT * FROM appointments WHERE userId = ? ORDER BY dateTime DESC LIMIT 10', [req.params.id]
-  ) as [Appointment[], unknown];
-  const [tickets] = await pool.query(
-    'SELECT * FROM tickets WHERE userId = ? ORDER BY created_at DESC LIMIT 10', [req.params.id]
-  ) as [Ticket[], unknown];
-  const [documents] = await pool.query(
-    'SELECT * FROM documents WHERE userId = ? ORDER BY created_at DESC', [req.params.id]
-  ) as [DocumentRow[], unknown];
+  const [user, appointments, tickets, documents] = await Promise.all([
+    userRepository.findAdminById(req.params.id),
+    appointmentRepository.findByUser(req.params.id, 10),
+    ticketRepository.findByUser(req.params.id, 10),
+    documentRepository.findByUser(req.params.id),
+  ]);
 
-  res.json({ user: user[0], appointments, tickets, documents });
+  res.json({ user, appointments, tickets, documents });
 }));
 
 adminRouter.delete('/users/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  await pool.query('DELETE FROM users WHERE id = ?', [req.params.id]);
+  await userRepository.deleteById(req.params.id);
   res.json({ success: true });
 }));
 
 // Modifier un utilisateur (nom, téléphone, email)
 adminRouter.put('/users/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  const { name, phone, email }: Partial<Pick<User, 'name' | 'phone' | 'email'>> = req.body;
-  const fields: string[] = [];
-  const params: (string | number)[] = [];
-  if (name  !== undefined) { fields.push('name = ?');  params.push(name); }
-  if (phone !== undefined) { fields.push('phone = ?'); params.push(phone); }
-  if (email !== undefined) { fields.push('email = ?'); params.push(email); }
-  if (!fields.length) throw new ValidationError('Aucun champ à modifier');
+  const { name, phone, email } = req.body as { name?: string; phone?: string; email?: string };
+  if (name === undefined && phone === undefined && email === undefined) {
+    throw new ValidationError('Aucun champ à modifier');
+  }
 
-  params.push(req.params.id);
+  const updateData: Record<string, unknown> = {};
+  if (name !== undefined) updateData.name = name;
+  if (phone !== undefined) updateData.phone = phone;
+  if (email !== undefined) updateData.email = email;
+
   try {
-    await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
+    await userRepository.updateAdminFields(req.params.id, updateData);
   } catch (err: any) {
     if (err.code === 'ER_DUP_ENTRY') throw new ConflictError('Email déjà utilisé');
     throw err;
   }
 
-  const [rows] = await pool.query(
-    'SELECT id, name, email, phone, avatar, blocked, created_at FROM users WHERE id = ?', [req.params.id]
-  ) as [User[], unknown];
-  res.json(rows[0]);
+  res.json(await userRepository.findAdminById(req.params.id));
 }));
 
 // Bloquer / débloquer un utilisateur (empêche la connexion — voir authGuard/login)
 adminRouter.put('/users/:id/block', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { blocked }: { blocked: boolean } = req.body;
-  await pool.query('UPDATE users SET blocked = ? WHERE id = ?', [blocked ? 1 : 0, req.params.id]);
+  await userRepository.setBlocked(req.params.id, blocked);
   res.json({ success: true, blocked: !!blocked });
 }));
 
@@ -191,56 +167,42 @@ adminRouter.put('/users/:id/block', asyncHandler(async (req: AdminRequest, res: 
 
 adminRouter.get('/appointments', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { status, limit = '50', from, to } = req.query as Record<string, string>;
-  const params: (string | number)[] = [];
-  const conditions: string[] = [];
-  if (status) { conditions.push('a.status = ?'); params.push(status); }
-  if (from)   { conditions.push('a.dateTime >= ?'); params.push(from); }
-  if (to)     { conditions.push('a.dateTime <= ?'); params.push(to); }
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  params.push(parseInt(limit));
+  const filters = { status, from, to, limit: parseInt(limit) };
 
-  const [rows] = await pool.query(
-    `SELECT a.*, u.name as userName FROM appointments a LEFT JOIN users u ON u.id = a.userId ${where} ORDER BY a.dateTime ASC LIMIT ?`,
-    params
-  ) as [Appointment[], unknown];
-  const countParams = conditions.length ? params.slice(0, -1) : [];
-  const [[{ total }]] = await pool.query(
-    `SELECT COUNT(*) as total FROM appointments a ${where}`, countParams
-  ) as [{ total: number }[], unknown];
+  const [appointments, total] = await Promise.all([
+    appointmentRepository.findAdminList(filters),
+    appointmentRepository.countAdminList(filters),
+  ]);
 
-  res.json({ appointments: rows, total });
+  res.json({ appointments, total });
 }));
 
 adminRouter.delete('/appointments/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  await pool.query('DELETE FROM appointments WHERE id = ?', [req.params.id]);
+  await appointmentRepository.deleteById(req.params.id);
   res.json({ success: true });
 }));
 
 // Modifier un rendez-vous (titre, description, date/heure, lieu, statut)
 adminRouter.put('/appointments/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  const { title, description, dateTime, location, status }: Partial<Appointment> = req.body;
-  const fields: string[] = [];
-  const params: (string | number)[] = [];
-  if (title       !== undefined) { fields.push('title = ?');       params.push(title); }
-  if (description !== undefined) { fields.push('description = ?'); params.push(description ?? ''); }
-  if (dateTime    !== undefined) { fields.push('dateTime = ?');    params.push(dateTime); }
-  if (location    !== undefined) { fields.push('location = ?');    params.push(location ?? ''); }
-  if (status      !== undefined) { fields.push('status = ?');      params.push(status); }
-  if (!fields.length) throw new ValidationError('Aucun champ à modifier');
+  const { title, description, dateTime, location, status } = req.body;
+  if ([title, description, dateTime, location, status].every(v => v === undefined)) {
+    throw new ValidationError('Aucun champ à modifier');
+  }
 
-  params.push(req.params.id);
-  await pool.query(`UPDATE appointments SET ${fields.join(', ')} WHERE id = ?`, params);
+  const updateData: Record<string, unknown> = {};
+  if (title !== undefined) updateData.title = title;
+  if (description !== undefined) updateData.description = description ?? '';
+  if (dateTime !== undefined) updateData.dateTime = dateTime;
+  if (location !== undefined) updateData.location = location ?? '';
+  if (status !== undefined) updateData.status = status;
+  await appointmentRepository.updateAdminFields(req.params.id, updateData);
 
-  const [rows] = await pool.query(
-    'SELECT a.*, u.name as userName FROM appointments a LEFT JOIN users u ON u.id = a.userId WHERE a.id = ?',
-    [req.params.id]
-  ) as [Appointment[], unknown];
-  res.json(rows[0]);
+  res.json(await appointmentRepository.findByIdWithUserName(req.params.id));
 }));
 
 // Bloquer un rendez-vous (raccourci : passe le statut à "cancelled")
 adminRouter.put('/appointments/:id/block', asyncHandler(async (req: AdminRequest, res: Response) => {
-  await pool.query("UPDATE appointments SET status = 'cancelled' WHERE id = ?", [req.params.id]);
+  await appointmentRepository.setStatusById(req.params.id, 'cancelled');
   res.json({ success: true });
 }));
 
@@ -252,19 +214,13 @@ adminRouter.put('/appointments/:id/block', asyncHandler(async (req: AdminRequest
 
 adminRouter.get('/waitlist', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { date, from, to } = req.query as Record<string, string>;
-  const params: string[] = [];
-  let where = '';
-  if (date) { where = 'WHERE date = ?'; params.push(date); }
-  else if (from && to) { where = 'WHERE date BETWEEN ? AND ?'; params.push(from, to); }
-
-  const [rows] = await pool.query(
-    `SELECT id, userId, name, date, quantity, created_at FROM waitlist ${where} ORDER BY date ASC, created_at ASC`,
-    params
-  ) as [WaitlistEntry[], unknown];
+  const rows = date
+    ? await waitlistRepository.findByDate(date)
+    : (from && to ? await waitlistRepository.findByRange(from, to) : await waitlistRepository.findAll());
 
   // Rang recalculé par jour (1 = premier inscrit de la journée)
   const countsByDate: Record<string, number> = {};
-  const withRank: WaitlistEntry[] = rows.map(w => {
+  const withRank = rows.map(w => {
     const key = String(w.date);
     countsByDate[key] = (countsByDate[key] || 0) + 1;
     return { ...w, rank: countsByDate[key] };
@@ -276,7 +232,7 @@ adminRouter.get('/waitlist', asyncHandler(async (req: AdminRequest, res: Respons
 }));
 
 adminRouter.delete('/waitlist/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  await pool.query('DELETE FROM waitlist WHERE id = ?', [req.params.id]);
+  await waitlistRepository.delete(req.params.id);
   res.json({ success: true });
 }));
 
@@ -286,25 +242,17 @@ adminRouter.delete('/waitlist/:id', asyncHandler(async (req: AdminRequest, res: 
 
 adminRouter.get('/tickets', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { status, limit = '50' } = req.query as Record<string, string>;
-  const params: (string | number)[] = [];
-  let where = '';
-  if (status) { where = 'WHERE t.status = ?'; params.push(status); }
-  params.push(parseInt(limit));
 
-  const [rows] = await pool.query(
-    `SELECT t.*, u.name as userName FROM tickets t LEFT JOIN users u ON u.id = t.userId ${where} ORDER BY t.created_at DESC LIMIT ?`,
-    params
-  ) as [Ticket[], unknown];
-  const [[{ total }]] = await pool.query(
-    `SELECT COUNT(*) as total FROM tickets${status ? ' WHERE status = ?' : ''}`,
-    status ? [status] : []
-  ) as [{ total: number }[], unknown];
+  const [tickets, total] = await Promise.all([
+    ticketRepository.findAdminList(status, parseInt(limit)),
+    ticketRepository.countAdminList(status),
+  ]);
 
-  res.json({ tickets: rows, total });
+  res.json({ tickets, total });
 }));
 
 adminRouter.delete('/tickets/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  await pool.query('DELETE FROM tickets WHERE id = ?', [req.params.id]);
+  await ticketRepository.deleteById(req.params.id);
   res.json({ success: true });
 }));
 
@@ -315,17 +263,7 @@ adminRouter.delete('/tickets/:id', asyncHandler(async (req: AdminRequest, res: R
 
 adminRouter.get('/conversations', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { userId, limit = '50' } = req.query as Record<string, string>;
-  const params: (string | number)[] = [];
-  let where = '';
-  if (userId) { where = 'WHERE c.userId = ?'; params.push(userId); }
-  params.push(parseInt(limit));
-
-  const [rows] = await pool.query(
-    `SELECT c.*, u.name as userName FROM chat_messages c LEFT JOIN users u ON u.id = c.userId
-     ${where} ORDER BY c.created_at DESC LIMIT ?`,
-    params
-  ) as [ChatMessage[], unknown];
-  res.json(rows);
+  res.json(await chatMessageRepository.findAll(userId ? Number(userId) : undefined, parseInt(limit)));
 }));
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -347,19 +285,14 @@ adminRouter.post('/notifications/send', asyncHandler(async (req: AdminRequest, r
   }
 
   // Broadcast à tous les utilisateurs
-  const [users] = await pool.query('SELECT id FROM users') as [{ id: number }[], unknown];
-  await Promise.all(users.map(u => createNotification(u.id, type || 'info', category || 'system', message)));
-  res.json({ success: true, sent: users.length });
+  const userIds = await userRepository.findAllIds();
+  await Promise.all(userIds.map(id => createNotification(id, type || 'info', category || 'system', message)));
+  res.json({ success: true, sent: userIds.length });
 }));
 
 adminRouter.get('/notifications', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { limit = '50' } = req.query as Record<string, string>;
-  const [rows] = await pool.query(
-    `SELECT n.*, u.name as userName FROM notifications n LEFT JOIN users u ON u.id = n.userId
-     ORDER BY n.created_at DESC LIMIT ?`,
-    [parseInt(limit)]
-  ) as [NotificationRow[], unknown];
-  res.json(rows);
+  res.json(await notificationRepository.findAdminList(parseInt(limit)));
 }));
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -372,37 +305,65 @@ adminRouter.post('/documents/send', upload.single('file'), asyncHandler(async (r
   if (!userId) throw new ValidationError('userId requis');
   if (!req.file) throw new ValidationError('Fichier requis');
 
-  const filePath = `/uploads/documents/${req.file.filename}`;
-
-  const [result] = await pool.query(
-    'INSERT INTO documents (userId, name, file_path, file_size, mime_type, expires_at, sent_by_admin) VALUES (?, ?, ?, ?, ?, ?, 1)',
-    [userId, type || 'other', filePath, req.file.size, req.file.mimetype, expiresAt || null]
-  ) as [{ insertId: number }, unknown];
+  const document = await documentRepository.createByAdmin({
+    userId, name: type || 'other',
+    filePath: `/uploads/documents/${req.file.filename}`,
+    fileSize: req.file.size, mimeType: req.file.mimetype, expiresAt: expiresAt || null,
+  });
 
   await createNotification(userId, 'info', 'document', `Un nouveau document (${type || 'autre'}) a été ajouté par l'agence`);
 
-  const [rows] = await pool.query('SELECT * FROM documents WHERE id = ?', [result.insertId]) as [DocumentRow[], unknown];
-  res.status(201).json(rows[0]);
+  res.status(201).json(document);
 }));
 
 adminRouter.get('/documents', asyncHandler(async (req: AdminRequest, res: Response) => {
   const { userId, limit = '50' } = req.query as Record<string, string>;
-  const params: (string | number)[] = [];
-  let where = '';
-  if (userId) { where = 'WHERE d.userId = ?'; params.push(userId); }
-  params.push(parseInt(limit));
-
-  const [rows] = await pool.query(
-    `SELECT d.*, u.name as userName FROM documents d LEFT JOIN users u ON u.id = d.userId
-     ${where} ORDER BY d.created_at DESC LIMIT ?`,
-    params
-  ) as [DocumentRow[], unknown];
-  res.json(rows);
+  res.json(await documentRepository.findAdminList(userId, parseInt(limit)));
 }));
 
+// Suppression : retire à la fois le fichier physique sur le disque et son
+// enregistrement en base, comme le fait déjà la route équivalente côté
+// client (documents.ts) — sans ça, le fichier restait orphelin sur le
+// serveur après une suppression admin.
 adminRouter.delete('/documents/:id', asyncHandler(async (req: AdminRequest, res: Response) => {
-  await pool.query('DELETE FROM documents WHERE id = ?', [req.params.id]);
+  const document = await documentRepository.findByIdAdmin(req.params.id);
+  if (!document) throw new NotFoundError('Document introuvable');
+
+  deleteUploadedFile('documents', path.basename(document.file_path));
+  await documentRepository.deleteById(req.params.id);
   res.json({ success: true });
+}));
+
+// Purge des documents expirés (politique de conservation RGPD) : supprime
+// à la fois le fichier physique et l'enregistrement en base pour chaque
+// document dont expires_at est dépassé, tous utilisateurs confondus.
+// "Best effort" : l'échec sur un document (fichier déjà absent du disque,
+// erreur base) est journalisé mais ne bloque jamais le traitement des
+// documents suivants — même logique que pour la suppression d'un compte.
+export async function purgeExpiredDocuments(): Promise<number> {
+  const expired = await documentRepository.findAllExpired();
+  let purged = 0;
+
+  for (const document of expired) {
+    try {
+      deleteUploadedFile('documents', path.basename(document.file_path));
+    } catch (err) {
+      console.error(`Fichier déjà absent ou inaccessible : ${document.file_path}`, err);
+    }
+    try {
+      await documentRepository.deleteById(String(document.id));
+      purged++;
+    } catch (err) {
+      console.error(`Échec de suppression en base du document ${document.id}`, err);
+    }
+  }
+
+  return purged;
+}
+
+adminRouter.post('/documents/purge-expired', asyncHandler(async (_req: AdminRequest, res: Response) => {
+  const purged = await purgeExpiredDocuments();
+  res.json({ success: true, purged });
 }));
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -411,10 +372,7 @@ adminRouter.delete('/documents/:id', asyncHandler(async (req: AdminRequest, res:
 
 adminRouter.get('/admins', asyncHandler(async (req: AdminRequest, res: Response) => {
   requireSuperadmin(req);
-  const [rows] = await pool.query(
-    'SELECT id, username, email, role, created_at FROM admins ORDER BY created_at DESC'
-  ) as [Admin[], unknown];
-  res.json(rows);
+  res.json(await adminRepository.findAll());
 }));
 
 adminRouter.post('/admins', asyncHandler(async (req: AdminRequest, res: Response) => {
@@ -425,11 +383,8 @@ adminRouter.post('/admins', asyncHandler(async (req: AdminRequest, res: Response
 
   const hash = await bcrypt.hash(password, 12);
   try {
-    const [result] = await pool.query(
-      'INSERT INTO admins (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
-      [username, email, hash, role || 'admin']
-    ) as [{ insertId: number }, unknown];
-    res.status(201).json({ id: result.insertId, username, email, role: role || 'admin' });
+    const { id } = await adminRepository.create({ username, email, passwordHash: hash, role: role || 'admin' });
+    res.status(201).json({ id, username, email, role: role || 'admin' });
   } catch (err: any) {
     if (err.code === 'ER_DUP_ENTRY') throw new ConflictError('Username ou email déjà utilisé');
     throw err;
@@ -441,6 +396,6 @@ adminRouter.delete('/admins/:id', asyncHandler(async (req: AdminRequest, res: Re
   if (parseInt(req.params.id) === req.admin!.id) {
     throw new ValidationError('Impossible de supprimer votre propre compte');
   }
-  await pool.query('DELETE FROM admins WHERE id = ?', [req.params.id]);
+  await adminRepository.deleteById(req.params.id);
   res.json({ success: true });
 }));

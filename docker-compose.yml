@@ -3,8 +3,7 @@ services:
     image: mysql:8
     restart: unless-stopped
     environment:
-      # Identifiants dédiés au conteneur Docker — volontairement différents
-      # de ton compte MySQL local (root). Pas besoin qu'ils correspondent.
+      
       MYSQL_ROOT_PASSWORD: docker_root_pw
       MYSQL_DATABASE: nestor_vocal
       MYSQL_USER: nestor
@@ -26,7 +25,7 @@ services:
       mysql:
         condition: service_healthy
     environment:
-      # Doit correspondre exactement aux identifiants du service mysql ci-dessus.
+      
       DB_HOST: mysql
       DB_USER: nestor
       DB_PASS: nestor
@@ -61,10 +60,6 @@ services:
     ports:
       - "5173:80"
 
-  # SonarQube démarre avec le reste (`docker compose up`).
-  # SONAR_ES_BOOTSTRAP_CHECKS_DISABLE évite un souci fréquent sur Windows/WSL2
-  # (vm.max_map_count trop bas) — acceptable pour un usage local/démo,
-  # à ne pas faire en production.
   sonarqube:
     image: sonarqube:lts-community
     restart: unless-stopped
@@ -77,8 +72,6 @@ services:
       - sonarqube_extensions:/opt/sonarqube/extensions
       - sonarqube_logs:/opt/sonarqube/logs
 
-  # Ne démarre PAS avec `docker compose up` (profil "tools") — se lance à la
-  # demande, une fois qu'on veut analyser le code. Voir instructions plus bas.
   sonar-scanner:
     image: sonarsource/sonar-scanner-cli:10
     profiles: ["tools"]

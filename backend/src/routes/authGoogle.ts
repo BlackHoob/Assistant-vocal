@@ -2,13 +2,18 @@ import { Router, Request, Response } from 'express';
 import passport from 'passport';
 import { Strategy as GoogleStrategy, Profile } from 'passport-google-oauth20';
 import jwt from 'jsonwebtoken';
-import { pool } from '../config/db';
 import { JWT_SECRET } from './auth';
 import { User } from '../types';
+import { MySqlUserRepository } from '../repository/userRepository';
+import { MySqlGoogleAuthCodeRepository } from '../repository/googleAuthCodeRepository';
+import { asyncHandler } from '../utils/asyncHandler';
+import { ValidationError } from '../errors/AppError';
 import dotenv from 'dotenv';
 dotenv.config();
 
 export const authGoogleRouter = Router();
+const userRepository = new MySqlUserRepository();
+const googleAuthCodeRepository = new MySqlGoogleAuthCodeRepository();
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:4000';
@@ -23,23 +28,15 @@ async function findOrCreateGoogleUser(profile: Profile): Promise<User> {
   const name = profile.displayName || '';
   const googleId = profile.id;
 
-  const [existing] = await pool.query(
-    'SELECT * FROM users WHERE google_id = ? OR email = ?', [googleId, email]
-  ) as [User[], unknown];
-
-  if (existing[0]) {
-    const user = existing[0];
-    if (!(user as any).google_id) {
-      await pool.query('UPDATE users SET google_id = ? WHERE id = ?', [googleId, user.id]);
+  const existing = await userRepository.findByGoogleIdOrEmail(googleId, email);
+  if (existing) {
+    if (!(existing as any).google_id) {
+      await userRepository.setGoogleId(existing.id, googleId);
     }
-    return user;
+    return existing;
   }
 
-  const [result] = await pool.query(
-    'INSERT INTO users (name, email, google_id) VALUES (?, ?, ?)', [name, email, googleId]
-  ) as [{ insertId: number }, unknown];
-  const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]) as [User[], unknown];
-  return created[0];
+  return userRepository.create({ name, email, googleId });
 }
 
 passport.use(new GoogleStrategy({
@@ -57,24 +54,49 @@ passport.use(new GoogleStrategy({
 
 passport.serializeUser((user: any, done) => done(null, user.id));
 passport.deserializeUser(async (id: number, done) => {
-  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [id]) as [User[], unknown];
-  done(null, rows[0]);
+  const user = await userRepository.findById(id);
+  done(null, user);
 });
 
 // GET /api/auth/google — déclenche le OAuth Google
 authGoogleRouter.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-// GET /api/auth/google/callback — callback après auth Google
+// GET /api/auth/google/callback — callback après auth Google. Ne transmet
+// plus le token JWT ni les données du profil dans l'URL de redirection :
+// un code à usage unique et courte durée de vie (60s) est généré à la
+// place. Le frontend l'échange ensuite contre le vrai token via
+// POST /api/auth/google/exchange, qui ne transite jamais par une URL.
 authGoogleRouter.get('/google/callback',
   passport.authenticate('google', { session: false, failureRedirect: `${FRONTEND_URL}/login?error=google` }),
-  (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const user = req.user as User;
-    const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name },
-      JWT_SECRET,
-      { expiresIn: GOOGLE_TOKEN_EXPIRES }
-    );
-    const params = new URLSearchParams({ token, name: user.name, email: user.email, id: String(user.id) });
-    res.redirect(`${FRONTEND_URL}/auth/callback?${params.toString()}`);
-  }
+    const code = await googleAuthCodeRepository.create(user.id);
+    res.redirect(`${FRONTEND_URL}/auth/callback?code=${code}`);
+  })
 );
+
+// POST /api/auth/google/exchange — échange le code temporaire contre le
+// vrai token JWT. Route publique (pas de authGuard) : c'est justement ce
+// qui permet au frontend de récupérer le token juste après la redirection,
+// avant d'être authentifié.
+authGoogleRouter.post('/google/exchange', asyncHandler(async (req: Request, res: Response) => {
+  const { code } = req.body as { code?: string };
+  if (!code) throw new ValidationError('Code requis');
+
+  const userId = await googleAuthCodeRepository.consume(code);
+  if (!userId) throw new ValidationError('Code invalide ou expiré');
+
+  const user = await userRepository.findById(userId);
+  if (!user) throw new ValidationError('Code invalide ou expiré');
+
+  const token = jwt.sign(
+    { id: user.id, email: user.email, name: user.name },
+    JWT_SECRET,
+    { expiresIn: GOOGLE_TOKEN_EXPIRES }
+  );
+
+  res.json({
+    token,
+    user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, phone: user.phone },
+  });
+}));

@@ -50,7 +50,6 @@ export default function ProfilePage() {
   const [notifSaved, setNotifSaved] = useState(false);
 
   // Suppression de compte
-  const [deletePassword, setDeletePassword] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
 
@@ -147,22 +146,15 @@ export default function ProfilePage() {
     localStorage.setItem('lang', code);
   };
 
-  const handleDeleteAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleDeleteAccount = async () => {
     setDeleteError('');
-    if (!deletePassword) return setDeleteError('Mot de passe requis pour confirmer');
-    if (!confirm('Cette action est définitive et supprimera toutes vos données (rendez-vous, billets, documents). Continuer ?')) return;
+    const confirmed = window.confirm(
+      'Cette action est définitive et supprimera toutes vos données (rendez-vous, billets, documents). Continuer ?'
+    );
+    if (!confirmed) return;
     setDeleting(true);
     try {
-      const res = await fetch(`${API}/profile`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: deletePassword }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || 'Mot de passe incorrect ou erreur serveur');
-      }
+      await api.del('/profile');
       logout();
       navigate('/login');
     } catch (err: any) {
@@ -556,29 +548,18 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        <form onSubmit={handleDeleteAccount} className="space-y-4">
-          {deleteError && <p className="text-red-500 text-sm">{deleteError}</p>}
-          <div>
-            <label className="text-xs font-medium text-gray-500 block mb-1.5">
-              Confirmez avec votre mot de passe
-            </label>
-            <input
-              type="password"
-              value={deletePassword}
-              onChange={e => setDeletePassword(e.target.value)}
-              className="input-field"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-          <button type="submit" disabled={deleting}
-            className="flex items-center gap-2 bg-red-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-red-600 transition-all disabled:opacity-50">
-            {deleting
-              ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              : <Trash2 size={14} />}
-            Supprimer définitivement mon compte
-          </button>
-        </form>
+        {deleteError && <p className="text-red-500 text-sm mb-4">{deleteError}</p>}
+
+        <button
+          onClick={handleDeleteAccount}
+          disabled={deleting}
+          className="flex items-center gap-2 bg-red-500 text-white text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-red-600 transition-all disabled:opacity-50"
+        >
+          {deleting
+            ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            : <Trash2 size={14} />}
+          Supprimer définitivement mon compte
+        </button>
       </div>
     </div>
   );

@@ -1,14 +1,16 @@
 import { Router, Response } from 'express';
 import { authGuard, AuthRequest } from '../middleware/authGuard';
-import { pool } from '../config/db';
 import axios from 'axios';
 import { createNotification } from './notifications';
 import { asyncHandler } from '../utils/asyncHandler';
 import { AppError, ValidationError } from '../errors/AppError';
 import { Ticket, FlightOffer } from '../types';
+import { MySqlTicketRepository } from '../repository/ticketRepository';
 
 export const ticketsRouter = Router();
 ticketsRouter.use(authGuard);
+
+const ticketRepository = new MySqlTicketRepository();
 
 const DUFFEL_API_KEY = process.env.DUFFEL_API_KEY || '';
 const DUFFEL_URL = 'https://api.duffel.com';
@@ -128,37 +130,25 @@ export async function searchFlights(
 }
 
 export async function getUserTickets(userId: number): Promise<Ticket[]> {
-  const [rows] = await pool.query(
-    'SELECT * FROM tickets WHERE userId = ? ORDER BY departureDate DESC', [userId]
-  ) as [Ticket[], unknown];
-  return rows;
+  return ticketRepository.findAllByUser(userId);
 }
 
 export async function saveTicket(userId: number, data: {
   flightNumber?: string; airline?: string; origin: string; destination: string;
   departureDate?: string; arrivalDate?: string; price?: number; currency?: string;
 }): Promise<Ticket> {
-  const { flightNumber, airline, origin, destination, departureDate, arrivalDate, price, currency } = data;
-  if (!origin || !destination) throw new ValidationError('Origine et destination requis');
+  if (!data.origin || !data.destination) throw new ValidationError('Origine et destination requis');
 
-  const [result] = await pool.query(
-    `INSERT INTO tickets (userId, flightNumber, airline, origin, destination, departureDate, arrivalDate, price, currency)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [userId, flightNumber || '', airline || '', origin, destination,
-     departureDate || '', arrivalDate || '', price ? Number(price) : 0, currency || 'EUR']
-  ) as [{ insertId: number }, unknown];
+  const ticket = await ticketRepository.create(userId, data);
 
-  const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [result.insertId]) as [Ticket[], unknown];
-  const ticket = rows[0];
-
-  const flightLabel = flightNumber ? `${flightNumber} ` : '';
-  await createNotification(userId, 'success', 'ticket', `Billet ${flightLabel}${origin} → ${destination} enregistré`);
+  const flightLabel = data.flightNumber ? `${data.flightNumber} ` : '';
+  await createNotification(userId, 'success', 'ticket', `Billet ${flightLabel}${data.origin} → ${data.destination} enregistré`);
 
   return ticket;
 }
 
 export async function deleteTicket(userId: number, id: string): Promise<void> {
-  await pool.query('DELETE FROM tickets WHERE id = ? AND userId = ?', [id, userId]);
+  await ticketRepository.delete(id, userId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -181,7 +171,7 @@ ticketsRouter.post('/', asyncHandler(async (req: AuthRequest, res: Response) => 
 
 ticketsRouter.patch('/:id/status', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { status } = req.body;
-  await pool.query('UPDATE tickets SET status = ? WHERE id = ? AND userId = ?', [status, req.params.id, req.user!.id]);
+  await ticketRepository.updateStatus(req.params.id, req.user!.id, status);
   res.json({ success: true });
 }));
 
@@ -189,3 +179,4 @@ ticketsRouter.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response
   await deleteTicket(req.user!.id, req.params.id);
   res.json({ success: true });
 }));
+

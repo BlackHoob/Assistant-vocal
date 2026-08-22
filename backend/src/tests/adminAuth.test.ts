@@ -2,14 +2,20 @@
 import express from 'express';
 import request from 'supertest';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 
 import {
-  adminAuthRouter,
-  ADMIN_JWT_SECRET,
-} from '../routes/adminAuth';
+  adminRouter,
+  mergeMonthlySeries,
+} from '../routes/admin';
 
 import { pool } from '../config/db';
+import { createNotification } from '../routes/notifications';
+import { deleteUploadedFile } from '../utils/fileUpload';
+
+
+/* -------------------------------------------------------------------------- */
+/*                                   MOCKS                                    */
+/* -------------------------------------------------------------------------- */
 
 jest.mock('../config/db', () => ({
   pool: {
@@ -19,18 +25,82 @@ jest.mock('../config/db', () => ({
 
 jest.mock('bcryptjs', () => ({
   hash: jest.fn(),
-  compare: jest.fn(),
 }));
 
+jest.mock('../routes/notifications', () => ({
+  createNotification: jest.fn(),
+}));
+
+jest.mock('../middleware/adminGuard', () => ({
+  adminGuard: (
+    req: any,
+    _res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    const role = req.headers['x-test-admin-role'] || 'admin';
+
+    req.admin = {
+      id: 1,
+      username: 'admin',
+      email: 'admin@example.com',
+      role,
+    };
+
+    next();
+  },
+}));
+
+jest.mock('../utils/fileUpload', () => ({
+  createUploadMiddleware: jest.fn(() => ({
+    single: jest.fn(() => {
+      return (
+        req: any,
+        _res: express.Response,
+        next: express.NextFunction,
+      ) => {
+        if (req.headers['x-test-file'] === 'true') {
+          req.file = {
+            filename: 'test-document.pdf',
+            size: 12345,
+            mimetype: 'application/pdf',
+          };
+        }
+
+        next();
+      };
+    }),
+  })),
+  deleteUploadedFile: jest.fn(),
+}));
+
+/* -------------------------------------------------------------------------- */
+/*                                   MOCKED                                   */
+/* -------------------------------------------------------------------------- */
+
 const mockedPool = pool as jest.Mocked<typeof pool>;
+
 const mockedBcrypt = bcrypt as jest.Mocked<typeof bcrypt>;
+
+const mockedCreateNotification =
+  createNotification as jest.MockedFunction<
+    typeof createNotification
+  >;
+
+const mockedDeleteUploadedFile =
+  deleteUploadedFile as jest.MockedFunction<
+    typeof deleteUploadedFile
+  >;
+
+/* -------------------------------------------------------------------------- */
+/*                                    APP                                     */
+/* -------------------------------------------------------------------------- */
 
 const app = express();
 
 app.use(express.json());
-app.use('/api/admin/auth', adminAuthRouter);
 
-// Middleware de gestion des erreurs utilisé uniquement pour les tests.
+app.use('/api/admin', adminRouter);
+
 app.use(
   (
     err: Error & { statusCode?: number },
@@ -44,499 +114,389 @@ app.use(
   },
 );
 
-describe('Admin authentication routes', () => {
+
+
+/* -------------------------------------------------------------------------- */
+/*                                  TESTS                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('Admin routes', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    /*
+     * resetAllMocks() est important ici.
+     *
+     * clearAllMocks() efface uniquement les appels.
+     * resetAllMocks() efface également les valeurs des mocks,
+     * ce qui évite qu'un mockResolvedValueOnce() d'un test
+     * soit récupéré par le test suivant.
+     */
+    jest.resetAllMocks();
   });
 
-  // ============================================================
-  // LOGIN
-  // ============================================================
+  /* ======================================================================== */
+  /*                         mergeMonthlySeries                              */
+  /* ======================================================================== */
 
-  describe('POST /api/admin/auth/login', () => {
-    it('doit refuser une connexion si les identifiants sont manquants', async () => {
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          username: 'admin',
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Identifiants requis');
-
-      expect(mockedPool.query).not.toHaveBeenCalled();
-    });
-
-    it('doit refuser une connexion si le username est manquant', async () => {
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          password: 'password123',
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body.error).toBe('Identifiants requis');
-
-      expect(mockedPool.query).not.toHaveBeenCalled();
-    });
-
-    it('doit refuser un administrateur inexistant', async () => {
-      mockedPool.query.mockResolvedValueOnce([
-        [],
-        [],
-      ] as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          username: 'unknown',
-          password: 'password123',
-        });
-
-      expect(response.status).toBe(401);
-      expect(response.body.error).toBe('Identifiants invalides');
-
-      expect(mockedPool.query).toHaveBeenCalledWith(
-        'SELECT * FROM admins WHERE username = ? OR email = ?',
-        ['unknown', 'unknown'],
-      );
-
-      expect(mockedBcrypt.compare).not.toHaveBeenCalled();
-    });
-
-    it('doit refuser un mauvais mot de passe', async () => {
-      const admin = {
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        password_hash: 'hashed-password',
-        role: 'admin',
-        created_at: '2026-08-10',
-      };
-
-      mockedPool.query.mockResolvedValueOnce([
-        [admin],
-        [],
-      ] as never);
-
-      mockedBcrypt.compare.mockResolvedValue(false as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          username: 'admin',
-          password: 'wrong-password',
-        });
-
-      expect(response.status).toBe(401);
-      expect(response.body.error).toBe('Identifiants invalides');
-
-      expect(mockedBcrypt.compare).toHaveBeenCalledWith(
-        'wrong-password',
-        'hashed-password',
-      );
-    });
-
-    it('doit connecter un administrateur avec des identifiants valides', async () => {
-      const admin = {
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        password_hash: 'hashed-password',
-        role: 'admin',
-        created_at: '2026-08-10',
-      };
-
-      mockedPool.query
-        .mockResolvedValueOnce([
-          [admin],
-          [],
-        ] as never)
-        .mockResolvedValueOnce([
-          {},
-          [],
-        ] as never);
-
-      mockedBcrypt.compare.mockResolvedValue(true as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          username: 'admin',
-          password: 'password123',
-        });
-
-      expect(response.status).toBe(200);
-
-      expect(response.body.admin).toEqual({
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        role: 'admin',
-      });
-
-      expect(response.body.token).toEqual(
-        expect.any(String),
-      );
-
-      const decoded = jwt.verify(
-        response.body.token,
-        ADMIN_JWT_SECRET,
-      ) as {
-        id: number;
-        username: string;
-        email: string;
-        role: string;
-      };
-
-      expect(decoded.id).toBe(1);
-      expect(decoded.username).toBe('admin');
-      expect(decoded.email).toBe('admin@example.com');
-      expect(decoded.role).toBe('admin');
-
-      expect(mockedBcrypt.compare).toHaveBeenCalledWith(
-        'password123',
-        'hashed-password',
-      );
-
-      expect(response.body.admin.password_hash).toBeUndefined();
-
-      expect(mockedPool.query).toHaveBeenNthCalledWith(
-        1,
-        'SELECT * FROM admins WHERE username = ? OR email = ?',
-        ['admin', 'admin'],
-      );
-
-      expect(mockedPool.query).toHaveBeenNthCalledWith(
-        2,
-        'UPDATE admins SET last_login = NOW() WHERE id = ?',
-        [1],
-      );
-    });
-
-    it('doit accepter une connexion avec une adresse email', async () => {
-      const admin = {
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        password_hash: 'hashed-password',
-        role: 'admin',
-        created_at: '2026-08-10',
-      };
-
-      mockedPool.query
-        .mockResolvedValueOnce([
-          [admin],
-          [],
-        ] as never)
-        .mockResolvedValueOnce([
-          {},
-          [],
-        ] as never);
-
-      mockedBcrypt.compare.mockResolvedValue(true as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          username: 'admin@example.com',
-          password: 'password123',
-        });
-
-      expect(response.status).toBe(200);
-
-      expect(response.body.admin).toEqual({
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        role: 'admin',
-      });
-
-      expect(mockedPool.query).toHaveBeenNthCalledWith(
-        1,
-        'SELECT * FROM admins WHERE username = ? OR email = ?',
-        ['admin@example.com', 'admin@example.com'],
-      );
-    });
-
-    it('doit continuer à connecter même si la mise à jour de last_login échoue', async () => {
-      const admin = {
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        password_hash: 'hashed-password',
-        role: 'admin',
-        created_at: '2026-08-10',
-      };
-
-      mockedPool.query
-        .mockResolvedValueOnce([
-          [admin],
-          [],
-        ] as never)
-        .mockRejectedValueOnce(
-          new Error('Erreur last_login'),
-        );
-
-      mockedBcrypt.compare.mockResolvedValue(true as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/login')
-        .send({
-          username: 'admin',
-          password: 'password123',
-        });
-
-      expect(response.status).toBe(200);
-
-      expect(response.body.admin).toEqual({
-        id: 1,
-        username: 'admin',
-        email: 'admin@example.com',
-        role: 'admin',
-      });
-
-      expect(response.body.token).toEqual(
-        expect.any(String),
-      );
-    });
-  });
-
-  // ============================================================
-  // CHANGE PASSWORD
-  // ============================================================
-
-  describe('POST /api/admin/auth/change-password', () => {
-    const admin = {
-      id: 1,
-      username: 'admin',
-      email: 'admin@example.com',
-      password_hash: 'old-hashed-password',
-      role: 'admin',
-      created_at: '2026-08-10',
-    };
-
-    const createToken = () =>
-      jwt.sign(
+  describe('mergeMonthlySeries', () => {
+    it('doit fusionner deux séries mensuelles', () => {
+      const appointments = [
         {
-          id: admin.id,
-          username: admin.username,
-          email: admin.email,
-          role: admin.role,
+          month: '2026-01',
+          count: 10,
         },
-        ADMIN_JWT_SECRET,
+        {
+          month: '2026-03',
+          count: 30,
+        },
+      ];
+
+      const tickets = [
+        {
+          month: '2026-01',
+          count: 5,
+        },
+        {
+          month: '2026-02',
+          count: 20,
+        },
+      ];
+
+      const result = mergeMonthlySeries(
+        appointments,
+        tickets,
+        'appointments',
+        'tickets',
       );
 
-    it('doit refuser la requête si le token est absent', async () => {
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .send({
-          currentPassword: 'oldPassword123',
-          newPassword: 'newPassword123',
-        });
-
-      expect(response.status).toBe(401);
-
-      // adminAuth.ts utilise UnauthorizedError() sans message.
-      expect(response.body.error).toBe('Non autorisé');
-
-      expect(mockedPool.query).not.toHaveBeenCalled();
+      expect(result).toEqual([
+        {
+          month: '2026-01',
+          appointments: 10,
+          tickets: 5,
+        },
+        {
+          month: '2026-02',
+          appointments: 0,
+          tickets: 20,
+        },
+        {
+          month: '2026-03',
+          appointments: 30,
+          tickets: 0,
+        },
+      ]);
     });
 
-    it('doit refuser un token administrateur invalide', async () => {
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          'Bearer token-invalide',
-        )
-        .send({
-          currentPassword: 'oldPassword123',
-          newPassword: 'newPassword123',
-        });
-
-      /*
-       * adminAuth.ts ne possède actuellement aucun try/catch
-       * autour de jwt.verify().
-       *
-       * Donc l'erreur JsonWebTokenError remonte jusqu'au
-       * middleware d'erreur et produit 500.
-       */
-      expect(response.status).toBe(500);
+    it('doit gérer deux séries vides', () => {
+      expect(
+        mergeMonthlySeries(
+          [],
+          [],
+          'appointments',
+          'tickets',
+        ),
+      ).toEqual([]);
     });
+  });
 
-    it('doit refuser un nouveau mot de passe manquant', async () => {
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          currentPassword: 'oldPassword123',
-        });
+  /* ======================================================================== */
+  /*                               DASHBOARD                                  */
+  /* ======================================================================== */
 
-      /*
-       * Dans adminAuth.ts :
-       *
-       * if (!newPassword || newPassword.length < 8)
-       *
-       * les deux cas utilisent le même message.
-       */
-      expect(response.status).toBe(400);
-
-      expect(response.body.error).toBe(
-        'Mot de passe min. 8 caractères',
-      );
-
-      expect(mockedPool.query).not.toHaveBeenCalled();
-    });
-
-    it('doit refuser un nouveau mot de passe trop court', async () => {
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          currentPassword: 'oldPassword123',
-          newPassword: '1234567',
-        });
-
-      expect(response.status).toBe(400);
-
-      expect(response.body.error).toBe(
-        'Mot de passe min. 8 caractères',
-      );
-
-      expect(mockedPool.query).not.toHaveBeenCalled();
-    });
-
-    it('doit refuser un ancien mot de passe manquant', async () => {
-      mockedPool.query.mockResolvedValueOnce([
-        [admin],
-        [],
-      ] as never);
-
-      mockedBcrypt.compare.mockResolvedValue(false as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          newPassword: 'newPassword123',
-        });
-
-      /*
-       * La route ne vérifie pas explicitement
-       * currentPassword avant bcrypt.compare().
-       *
-       * undefined est donc transmis à bcrypt.compare().
-       */
-      expect(response.status).toBe(401);
-
-      expect(response.body.error).toBe(
-        'Mot de passe actuel incorrect',
-      );
-
-      expect(mockedBcrypt.compare).toHaveBeenCalledWith(
-        undefined,
-        'old-hashed-password',
-      );
-    });
-
-    it('doit refuser un administrateur inexistant', async () => {
-      mockedPool.query.mockResolvedValueOnce([
-        [],
-        [],
-      ] as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          currentPassword: 'oldPassword123',
-          newPassword: 'newPassword123',
-        });
-
-      expect(response.status).toBe(401);
-
-      /*
-       * UnauthorizedError() est utilisé sans message
-       * dans adminAuth.ts.
-       */
-      expect(response.body.error).toBe('Non autorisé');
-
-      expect(mockedBcrypt.compare).not.toHaveBeenCalled();
-    });
-
-    it('doit refuser un ancien mot de passe incorrect', async () => {
-      mockedPool.query.mockResolvedValueOnce([
-        [admin],
-        [],
-      ] as never);
-
-      mockedBcrypt.compare.mockResolvedValue(false as never);
-
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          currentPassword: 'wrongPassword',
-          newPassword: 'newPassword123',
-        });
-
-      expect(response.status).toBe(401);
-
-      expect(response.body.error).toBe(
-        'Mot de passe actuel incorrect',
-      );
-
-      expect(mockedBcrypt.compare).toHaveBeenCalledWith(
-        'wrongPassword',
-        'old-hashed-password',
-      );
-
-      expect(mockedBcrypt.hash).not.toHaveBeenCalled();
-    });
-
-    it('doit modifier le mot de passe avec succès', async () => {
+  describe('GET /api/admin/stats', () => {
+    it('doit retourner les statistiques du dashboard', async () => {
       mockedPool.query
         .mockResolvedValueOnce([
-          [admin],
+          [{ totalUsers: 100 }],
           [],
         ] as never)
         .mockResolvedValueOnce([
-          {},
+          [{ totalAppointments: 20 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalTickets: 30 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalDocuments: 40 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ upcomingAppointments: 5 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ upcomingTickets: 8 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              date: '2026-08-10',
+              count: 4,
+              type: 'appointment',
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              month: '2026-07',
+              count: 10,
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              month: '2026-07',
+              count: 5,
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              month: '2026-07',
+              count: 3,
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              destination: 'Paris',
+              count: 15,
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalIAMessages: 100 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalIAUsers: 20 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ iaConversationsToday: 5 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ usersWithTicket: 10 }],
           [],
         ] as never);
 
-      mockedBcrypt.compare.mockResolvedValue(true as never);
-
-      mockedBcrypt.hash.mockResolvedValue(
-        'new-hashed-password' as never,
+      const response = await request(app).get(
+        '/api/admin/stats',
       );
 
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        totalUsers: 100,
+        totalAppointments: 20,
+        totalTickets: 30,
+        totalDocuments: 40,
+        upcomingAppointments: 5,
+        upcomingTickets: 8,
+        recentActivity: [
+          {
+            date: '2026-08-10',
+            count: 4,
+            type: 'appointment',
+          },
+        ],
+        bookingsByMonth: [
+          {
+            month: '2026-07',
+            appointments: 10,
+            tickets: 5,
+          },
+        ],
+        newUsersByMonth: [
+          {
+            month: '2026-07',
+            count: 3,
+          },
+        ],
+        topDestinations: [
+          {
+            destination: 'Paris',
+            count: 15,
+          },
+        ],
+        ia: {
+          totalMessages: 100,
+          totalUsers: 20,
+          conversationsToday: 5,
+          conversionRate: 50,
+        },
+      });
+    });
+
+    it('doit retourner un taux de conversion de 0 sans utilisateur IA', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [{ totalUsers: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalAppointments: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalTickets: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalDocuments: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ upcomingAppointments: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ upcomingTickets: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalIAMessages: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ totalIAUsers: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ iaConversationsToday: 0 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ usersWithTicket: 0 }],
+          [],
+        ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/stats',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.ia.conversionRate).toBe(0);
+    });
+  });
+
+  /* ======================================================================== */
+  /*                                  USERS                                   */
+  /* ======================================================================== */
+
+  describe('Users', () => {
+    it('doit retourner la liste des utilisateurs', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 1,
+              name: 'Jean',
+              email: 'jean@example.com',
+              appointmentCount: 2,
+              ticketCount: 3,
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ total: 1 }],
+          [],
+        ] as never);
+
       const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          currentPassword: 'oldPassword123',
-          newPassword: 'newPassword123',
+        .get('/api/admin/users')
+        .query({
+          search: 'Jean',
+          page: '1',
+          limit: '20',
         });
+
+      expect(response.status).toBe(200);
+      expect(response.body.users).toHaveLength(1);
+      expect(response.body.total).toBe(1);
+      expect(response.body.page).toBe(1);
+      expect(response.body.pages).toBe(1);
+    });
+
+    it('doit retourner un utilisateur avec ses données associées', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 1,
+              name: 'Jean',
+              email: 'jean@example.com',
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ id: 10, userId: 1 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ id: 20, userId: 1 }],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ id: 30, userId: 1 }],
+          [],
+        ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/users/1',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.user.id).toBe(1);
+      expect(response.body.appointments).toHaveLength(1);
+      expect(response.body.tickets).toHaveLength(1);
+      expect(response.body.documents).toHaveLength(1);
+    });
+
+    it('doit supprimer un utilisateur', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app).delete(
+        '/api/admin/users/1',
+      );
 
       expect(response.status).toBe(200);
 
@@ -544,83 +504,993 @@ describe('Admin authentication routes', () => {
         success: true,
       });
 
-      expect(mockedBcrypt.compare).toHaveBeenCalledWith(
-        'oldPassword123',
-        'old-hashed-password',
-      );
-
-      expect(mockedBcrypt.hash).toHaveBeenCalledWith(
-        'newPassword123',
-        12,
-      );
-
-      expect(mockedPool.query).toHaveBeenLastCalledWith(
-        'UPDATE admins SET password_hash = ? WHERE id = ?',
-        ['new-hashed-password', 1],
+      expect(mockedPool.query).toHaveBeenCalledWith(
+        'DELETE FROM users WHERE id = ?',
+        ['1'],
       );
     });
 
-    it('doit refuser un token expiré', async () => {
-      const expiredToken = jwt.sign(
-        {
-          id: admin.id,
-          username: admin.username,
-          email: admin.email,
-          role: admin.role,
-        },
-        ADMIN_JWT_SECRET,
-        {
-          expiresIn: -1,
-        },
-      );
+    it('doit modifier un utilisateur', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          {},
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 1,
+              name: 'Nouveau nom',
+              email: 'new@example.com',
+              phone: '0600000000',
+              avatar: null,
+              blocked: 0,
+            },
+          ],
+          [],
+        ] as never);
 
       const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${expiredToken}`,
-        )
+        .put('/api/admin/users/1')
         .send({
-          currentPassword: 'oldPassword123',
-          newPassword: 'newPassword123',
-        });
-
-      /*
-       * Comme pour un token invalide :
-       * jwt.verify() lève directement une exception.
-       * adminAuth.ts ne l'intercepte pas.
-       */
-      expect(response.status).toBe(500);
-    });
-
-    it('doit accepter un token avec un préfixe Bearer', async () => {
-      mockedPool.query.mockResolvedValueOnce([
-        [admin],
-        [],
-      ] as never);
-
-      mockedBcrypt.compare.mockResolvedValue(true as never);
-
-      mockedBcrypt.hash.mockResolvedValue(
-        'new-hashed-password' as never,
-      );
-
-      const response = await request(app)
-        .post('/api/admin/auth/change-password')
-        .set(
-          'Authorization',
-          `Bearer ${createToken()}`,
-        )
-        .send({
-          currentPassword: 'oldPassword123',
-          newPassword: 'newPassword123',
+          name: 'Nouveau nom',
+          email: 'new@example.com',
+          phone: '0600000000',
         });
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
+      expect(response.body.name).toBe(
+        'Nouveau nom',
+      );
+    });
+
+    it('doit refuser la modification sans champ', async () => {
+      const response = await request(app)
+        .put('/api/admin/users/1')
+        .send({});
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'Aucun champ à modifier',
+      );
+    });
+
+    it('doit refuser un email déjà utilisé', async () => {
+      mockedPool.query.mockRejectedValueOnce({
+        code: 'ER_DUP_ENTRY',
+      });
+
+      const response = await request(app)
+        .put('/api/admin/users/1')
+        .send({
+          email: 'existing@example.com',
+        });
+
+      expect(response.status).toBe(409);
+
+      expect(response.body.error).toBe(
+        'Email déjà utilisé',
+      );
+    });
+
+    it('doit bloquer un utilisateur', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .put('/api/admin/users/1/block')
+        .send({
+          blocked: true,
+        });
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+        blocked: true,
+      });
+    });
+
+    it('doit débloquer un utilisateur', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .put('/api/admin/users/1/block')
+        .send({
+          blocked: false,
+        });
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+        blocked: false,
+      });
+    });
+  });
+
+  /* ======================================================================== */
+  /*                              APPOINTMENTS                                */
+  /* ======================================================================== */
+
+  describe('Appointments', () => {
+    it('doit retourner les rendez-vous sans filtre', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 1,
+              title: 'Rendez-vous',
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ total: 1 }],
+          [],
+        ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/appointments',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.total).toBe(1);
+      expect(response.body.appointments).toHaveLength(1);
+    });
+
+    it('doit filtrer les rendez-vous', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ total: 0 }],
+          [],
+        ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/appointments')
+        .query({
+          status: 'upcoming',
+          from: '2026-08-01',
+          to: '2026-08-31',
+          limit: '10',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.total).toBe(0);
+    });
+
+    it('doit supprimer un rendez-vous', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app).delete(
+        '/api/admin/appointments/1',
+      );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+      });
+    });
+
+    it('doit modifier un rendez-vous', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          {},
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 1,
+              title: 'Nouveau titre',
+              status: 'confirmed',
+            },
+          ],
+          [],
+        ] as never);
+
+      const response = await request(app)
+        .put('/api/admin/appointments/1')
+        .send({
+          title: 'Nouveau titre',
+          description: null,
+          dateTime: '2026-08-20 14:00:00',
+          location: null,
+          status: 'confirmed',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.title).toBe(
+        'Nouveau titre',
+      );
+    });
+
+    it('doit refuser une modification sans champ', async () => {
+      const response = await request(app)
+        .put('/api/admin/appointments/1')
+        .send({});
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'Aucun champ à modifier',
+      );
+    });
+
+    it('doit bloquer un rendez-vous', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app).put(
+        '/api/admin/appointments/1/block',
+      );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+      });
+    });
+  });
+
+  /* ======================================================================== */
+  /*                                WAITLIST                                  */
+  /* ======================================================================== */
+
+  describe('Waitlist', () => {
+    it('doit retourner la liste d’attente', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          {
+            id: 1,
+            userId: 10,
+            name: 'Jean',
+            date: '2026-08-20',
+            quantity: 2,
+            created_at: '2026-08-10 10:00:00',
+          },
+          {
+            id: 2,
+            userId: 11,
+            name: 'Marie',
+            date: '2026-08-20',
+            quantity: 1,
+            created_at: '2026-08-10 11:00:00',
+          },
+        ],
+        [],
+      ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/waitlist',
+      );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body[0].rank).toBe(1);
+      expect(response.body[1].rank).toBe(2);
+
+      expect(response.body[0].total).toBe(2);
+      expect(response.body[1].total).toBe(2);
+    });
+
+    it('doit filtrer la liste d’attente par date', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [],
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/waitlist')
+        .query({
+          date: '2026-08-20',
+        });
+
+      expect(response.status).toBe(200);
+    });
+
+    it('doit filtrer la liste d’attente par période', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [],
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/waitlist')
+        .query({
+          from: '2026-08-01',
+          to: '2026-08-31',
+        });
+
+      expect(response.status).toBe(200);
+    });
+
+    it('doit supprimer une entrée de liste d’attente', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app).delete(
+        '/api/admin/waitlist/1',
+      );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+      });
+    });
+  });
+
+  /* ======================================================================== */
+  /*                                 TICKETS                                  */
+  /* ======================================================================== */
+
+  describe('Tickets', () => {
+    it('doit retourner les billets', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 1,
+              userId: 1,
+              destination: 'Paris',
+            },
+          ],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ total: 1 }],
+          [],
+        ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/tickets',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.total).toBe(1);
+      expect(response.body.tickets).toHaveLength(1);
+    });
+
+    it('doit filtrer les billets par statut', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          [],
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [{ total: 0 }],
+          [],
+        ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/tickets')
+        .query({
+          status: 'confirmed',
+          limit: '10',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.total).toBe(0);
+    });
+
+    it('doit supprimer un billet', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app).delete(
+        '/api/admin/tickets/1',
+      );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+      });
+    });
+  });
+
+  /* ======================================================================== */
+  /*                             CONVERSATIONS IA                             */
+  /* ======================================================================== */
+
+  describe('Conversations IA', () => {
+    it('doit retourner toutes les conversations', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          {
+            id: 1,
+            userId: 10,
+            role: 'user',
+            content: 'Bonjour',
+          },
+        ],
+        [],
+      ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/conversations',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+    });
+
+    it('doit filtrer les conversations par utilisateur', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          {
+            id: 1,
+            userId: 10,
+          },
+        ],
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/conversations')
+        .query({
+          userId: '10',
+          limit: '20',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+    });
+  });
+
+  /* ======================================================================== */
+  /*                              NOTIFICATIONS                               */
+  /* ======================================================================== */
+
+  describe('Notifications', () => {
+    it('doit refuser une notification sans message', async () => {
+      const response = await request(app)
+        .post('/api/admin/notifications/send')
+        .send({
+          target: 'user',
+          userId: 1,
+          message: '   ',
+        });
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'Message requis',
+      );
+    });
+
+    it('doit refuser un envoi ciblé sans userId', async () => {
+      const response = await request(app)
+        .post('/api/admin/notifications/send')
+        .send({
+          target: 'user',
+          message: 'Bonjour',
+        });
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'userId requis pour un envoi ciblé',
+      );
+    });
+
+    it('doit envoyer une notification à un utilisateur', async () => {
+      mockedCreateNotification.mockResolvedValueOnce(
+        undefined as never,
+      );
+
+      const response = await request(app)
+        .post('/api/admin/notifications/send')
+        .send({
+          target: 'user',
+          userId: 10,
+          type: 'info',
+          category: 'system',
+          message: 'Bonjour',
+        });
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+        sent: 1,
+      });
+
+      expect(
+        mockedCreateNotification,
+      ).toHaveBeenCalledWith(
+        10,
+        'info',
+        'system',
+        'Bonjour',
+      );
+    });
+
+    it('doit envoyer une notification à tous les utilisateurs', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          { id: 1 },
+          { id: 2 },
+          { id: 3 },
+        ],
+        [],
+      ] as never);
+
+      mockedCreateNotification.mockResolvedValue(
+        undefined as never,
+      );
+
+      const response = await request(app)
+        .post('/api/admin/notifications/send')
+        .send({
+          target: 'all',
+          message: 'Maintenance prévue',
+        });
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+        sent: 3,
+      });
+
+      expect(
+        mockedCreateNotification,
+      ).toHaveBeenCalledTimes(3);
+    });
+
+    it('doit retourner les notifications', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          {
+            id: 1,
+            userId: 10,
+            message: 'Bonjour',
+          },
+        ],
+        [],
+      ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/notifications',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+    });
+  });
+
+  /* ======================================================================== */
+  /*                                 DOCUMENTS                                */
+  /* ======================================================================== */
+
+  describe('Documents', () => {
+    it('doit refuser un document sans userId', async () => {
+      const response = await request(app)
+        .post('/api/admin/documents/send')
+        .set('x-test-file', 'true')
+        .send({
+          type: 'passport',
+        });
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'userId requis',
+      );
+    });
+
+    it('doit refuser un document sans fichier', async () => {
+      const response = await request(app)
+        .post('/api/admin/documents/send')
+        .send({
+          userId: 10,
+          type: 'passport',
+        });
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'Fichier requis',
+      );
+    });
+
+    it('doit envoyer un document à un utilisateur', async () => {
+      mockedPool.query
+        .mockResolvedValueOnce([
+          {
+            insertId: 100,
+          },
+          [],
+        ] as never)
+        .mockResolvedValueOnce([
+          [
+            {
+              id: 100,
+              userId: 10,
+              name: 'passport',
+              file_path:
+                '/uploads/documents/test-document.pdf',
+            },
+          ],
+          [],
+        ] as never);
+
+      mockedCreateNotification.mockResolvedValueOnce(
+        undefined as never,
+      );
+
+      /*
+       * Le faux middleware multer crée req.file lorsque
+       * x-test-file=true.
+       *
+       * On utilise send() plutôt que field() car le mock
+       * ne parse pas réellement multipart/form-data.
+       */
+      const response = await request(app)
+        .post('/api/admin/documents/send')
+        .set('x-test-file', 'true')
+        .send({
+          userId: 10,
+          type: 'passport',
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.id).toBe(100);
+
+      expect(
+        mockedCreateNotification,
+      ).toHaveBeenCalled();
+    });
+
+    it('doit retourner les documents', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          {
+            id: 1,
+            userId: 10,
+            name: 'passport',
+          },
+        ],
+        [],
+      ] as never);
+
+      const response = await request(app).get(
+        '/api/admin/documents',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].id).toBe(1);
+    });
+
+    it('doit filtrer les documents par utilisateur', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [],
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/documents')
+        .query({
+          userId: '10',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([]);
+    });
+
+    it('doit supprimer un document', async () => {
+      // 1er appel : findByIdAdmin (SELECT) — doit renvoyer un document
+      // existant avec file_path, sinon la route répond 404 avant d'aller
+      // plus loin.
+      mockedPool.query.mockResolvedValueOnce([
+        [{ id: 1, userId: 10, file_path: '/uploads/documents/test-document.pdf' }],
+        [],
+      ] as never);
+
+      // 2e appel : deleteById (DELETE)
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app).delete(
+        '/api/admin/documents/1',
+      );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+      });
+    });
+
+    describe('POST /api/admin/documents/purge-expired', () => {
+      it('doit purger le fichier et la ligne en base de chaque document expiré', async () => {
+        // 1er appel : findAllExpired (SELECT)
+        mockedPool.query.mockResolvedValueOnce([
+          [
+            { id: 1, userId: 10, file_path: '/uploads/documents/old-passport.pdf' },
+            { id: 2, userId: 11, file_path: '/uploads/documents/old-ticket.pdf' },
+          ],
+          [],
+        ] as never);
+
+        // 2e et 3e appels : deleteById pour chacun des deux documents
+        mockedPool.query
+          .mockResolvedValueOnce([{}, []] as never)
+          .mockResolvedValueOnce([{}, []] as never);
+
+        const response = await request(app).post(
+          '/api/admin/documents/purge-expired',
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ success: true, purged: 2 });
+
+        expect(mockedDeleteUploadedFile).toHaveBeenCalledTimes(2);
+        expect(mockedDeleteUploadedFile).toHaveBeenCalledWith(
+          'documents',
+          'old-passport.pdf',
+        );
+        expect(mockedDeleteUploadedFile).toHaveBeenCalledWith(
+          'documents',
+          'old-ticket.pdf',
+        );
+      });
+
+      it('ne fait rien si aucun document n\'est expiré', async () => {
+        mockedPool.query.mockResolvedValueOnce([[], []] as never);
+
+        const response = await request(app).post(
+          '/api/admin/documents/purge-expired',
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ success: true, purged: 0 });
+        expect(mockedDeleteUploadedFile).not.toHaveBeenCalled();
+      });
+
+      it('continue de purger les autres documents même si un fichier est déjà absent du disque', async () => {
+        mockedPool.query.mockResolvedValueOnce([
+          [
+            { id: 1, userId: 10, file_path: '/uploads/documents/manquant.pdf' },
+            { id: 2, userId: 11, file_path: '/uploads/documents/present.pdf' },
+          ],
+          [],
+        ] as never);
+
+        mockedPool.query
+          .mockResolvedValueOnce([{}, []] as never)
+          .mockResolvedValueOnce([{}, []] as never);
+
+        mockedDeleteUploadedFile
+          .mockImplementationOnce(() => {
+            throw new Error('ENOENT: fichier introuvable');
+          })
+          .mockImplementationOnce(() => {});
+
+        const consoleErrorSpy = jest
+          .spyOn(console, 'error')
+          .mockImplementation(() => {});
+
+        const response = await request(app).post(
+          '/api/admin/documents/purge-expired',
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ success: true, purged: 2 });
+
+        consoleErrorSpy.mockRestore();
+      });
+    });
+  });
+
+  /* ======================================================================== */
+  /*                             ADMINISTRATEURS                              */
+  /* ======================================================================== */
+
+  describe('Administrateurs', () => {
+    it('doit refuser un administrateur normal', async () => {
+      const response = await request(app)
+        .get('/api/admin/admins')
+        .set('x-test-admin-role', 'admin');
+
+      expect(response.status).toBe(403);
+    });
+
+    it('doit permettre à un superadmin de lister les administrateurs', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        [
+          {
+            id: 1,
+            username: 'admin',
+            email: 'admin@example.com',
+            role: 'admin',
+          },
+        ],
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .get('/api/admin/admins')
+        .set(
+          'x-test-admin-role',
+          'superadmin',
+        );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+    });
+
+    it('doit permettre à un superadmin de créer un administrateur', async () => {
+      mockedBcrypt.hash.mockResolvedValue(
+        'hashed-password' as never,
+      );
+
+      mockedPool.query.mockResolvedValueOnce([
+        {
+          insertId: 2,
+        },
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .post('/api/admin/admins')
+        .set(
+          'x-test-admin-role',
+          'superadmin',
+        )
+        .send({
+          username: 'newadmin',
+          email: 'newadmin@example.com',
+          password: 'password123',
+          role: 'admin',
+        });
+
+      expect(response.status).toBe(201);
+
+      expect(response.body).toEqual({
+        id: 2,
+        username: 'newadmin',
+        email: 'newadmin@example.com',
+        role: 'admin',
+      });
+
+      expect(
+        mockedBcrypt.hash,
+      ).toHaveBeenCalledWith(
+        'password123',
+        12,
+      );
+    });
+
+    it('doit utiliser admin comme rôle par défaut', async () => {
+      mockedBcrypt.hash.mockResolvedValue(
+        'hashed-password' as never,
+      );
+
+      mockedPool.query.mockResolvedValueOnce([
+        {
+          insertId: 3,
+        },
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .post('/api/admin/admins')
+        .set(
+          'x-test-admin-role',
+          'superadmin',
+        )
+        .send({
+          username: 'admin2',
+          email: 'admin2@example.com',
+          password: 'password123',
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.role).toBe('admin');
+    });
+
+    it('doit gérer un doublon lors de la création', async () => {
+      mockedBcrypt.hash.mockResolvedValue(
+        'hashed-password' as never,
+      );
+
+      mockedPool.query.mockRejectedValueOnce({
+        code: 'ER_DUP_ENTRY',
+      });
+
+      const response = await request(app)
+        .post('/api/admin/admins')
+        .set(
+          'x-test-admin-role',
+          'superadmin',
+        )
+        .send({
+          username: 'admin',
+          email: 'admin@example.com',
+          password: 'password123',
+        });
+
+      expect(response.status).toBe(409);
+
+      expect(response.body.error).toBe(
+        'Username ou email déjà utilisé',
+      );
+    });
+
+    it('doit supprimer un autre administrateur', async () => {
+      mockedPool.query.mockResolvedValueOnce([
+        {},
+        [],
+      ] as never);
+
+      const response = await request(app)
+        .delete('/api/admin/admins/2')
+        .set(
+          'x-test-admin-role',
+          'superadmin',
+        );
+
+      expect(response.status).toBe(200);
+
+      expect(response.body).toEqual({
+        success: true,
+      });
+    });
+
+    it('doit empêcher un superadmin de supprimer son propre compte', async () => {
+      const response = await request(app)
+        .delete('/api/admin/admins/1')
+        .set(
+          'x-test-admin-role',
+          'superadmin',
+        );
+
+      expect(response.status).toBe(400);
+
+      expect(response.body.error).toBe(
+        'Impossible de supprimer votre propre compte',
+      );
+
+      expect(
+        mockedPool.query,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('doit refuser la suppression par un admin normal', async () => {
+      const response = await request(app)
+        .delete('/api/admin/admins/2')
+        .set(
+          'x-test-admin-role',
+          'admin',
+        );
+
+      expect(response.status).toBe(403);
     });
   });
 });
-
-
-

@@ -64,6 +64,7 @@ CALL drop_fk_if_replaced('tickets',       'tickets_ibfk_1',       'fk_tickets_us
 CALL drop_fk_if_replaced('documents',     'documents_ibfk_1',     'fk_documents_user');
 CALL drop_fk_if_replaced('waitlist',      'waitlist_ibfk_1',      'fk_waitlist_user');
 CALL drop_fk_if_replaced('chat_messages', 'chat_messages_ibfk_1', 'fk_chat_messages_user');
+CALL drop_fk_if_replaced('notifications', 'notifications_ibfk_1', 'fk_notifications_user');
 
 -- Nettoyage : ces procédures ne servent qu'à ce script
 DROP PROCEDURE IF EXISTS add_constraint_if_missing;

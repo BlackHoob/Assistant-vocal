@@ -1,78 +1,159 @@
 name: CI
 
-# Se déclenche sur chaque push et chaque pull request vers main — bon à
-# intégrer (Bloc 2, compétence "Intégrabilité ITIL") : le code n'est
-# considéré prêt que s'il passe ces étapes.
 on:
   push:
     branches: [main]
+
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   backend-tests:
-    name: Backend — tests & build
+    name: Backend - tests et build
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Recuperer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
-      - name: Install dependencies
+      - name: Installer les dependances
         run: npm ci
 
-      - name: Run unit tests
-        run: npx jest --ci --coverage
+      - name: Executer les tests backend
+        run: npx jest --ci --coverage --runInBand
 
-      - name: Type-check & compile
+      - name: Compiler le backend
         run: npm run build
 
-      - name: Upload coverage report
+      - name: Sauvegarder la couverture backend
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
           path: backend/coverage/
           retention-days: 7
 
-  frontend-build:
-    name: Frontend — type-check & build
+  frontend-tests:
+    name: Frontend - tests et build
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Recuperer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: Installer les dependances
         run: npm ci
 
-      - name: Type-check & build
+      - name: Executer les tests frontend
+        run: npm run test:coverage -- --maxWorkers=1 --minWorkers=1 --testTimeout=30000
+
+      - name: Compiler le frontend
         run: npm run build
         env:
           VITE_API_URL: http://localhost:4000/api
 
-  docker-build:
-    name: Docker images build
-    runs-on: ubuntu-latest
-    needs: [backend-tests, frontend-build]
-    steps:
-      - uses: actions/checkout@v4
+      - name: Sauvegarder la couverture frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          retention-days: 7
 
-      - name: Build backend image
+  sonarqube-analysis:
+    name: Analyse SonarQube
+    runs-on: [self-hosted, Windows, X64]
+
+    needs:
+      - backend-tests
+      - frontend-tests
+
+    steps:
+      - name: Recuperer le projet
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Recuperer la couverture backend
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage/
+
+      - name: Recuperer la couverture frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+
+      - name: Verifier SonarQube
+        shell: powershell
+        run: |
+          $etat = Invoke-RestMethod `
+            -Uri "http://127.0.0.1:9000/api/system/status"
+
+          if ($etat.status -ne "UP") {
+            throw "SonarQube n'est pas disponible."
+          }
+
+          Write-Host "SonarQube est disponible."
+
+      - name: Executer l'analyse SonarQube
+        shell: powershell
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SONAR_TOKEN)) {
+            throw "Le secret SONAR_TOKEN n'est pas configure."
+          }
+
+          if (-not (Get-Command sonar-scanner -ErrorAction SilentlyContinue)) {
+            throw "sonar-scanner est introuvable dans le PATH."
+          }
+
+          sonar-scanner "-Dsonar.login=$env:SONAR_TOKEN"
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+  docker-build:
+    name: Construction des images Docker
+    runs-on: ubuntu-latest
+
+    needs:
+      - backend-tests
+      - frontend-tests
+
+    steps:
+      - name: Recuperer le projet
+        uses: actions/checkout@v4
+
+      - name: Construire l'image backend
         run: docker build -t nestor-vocal-backend:ci ./backend
 
-      - name: Build frontend image
+      - name: Construire l'image frontend
         run: docker build -t nestor-vocal-frontend:ci ./frontend
